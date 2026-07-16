@@ -217,6 +217,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "carbon-oracle"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "rand",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
