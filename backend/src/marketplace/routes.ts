@@ -32,6 +32,32 @@ export function marketplaceRoutes(deps: IdempotencyDeps): Router {
   const service = new MarketplaceService(deps.store, deps.chain, deps.config.now);
   const router = Router();
 
+  // Public browse endpoint (scrape target — rate limited per config).
+  router.get('/listings', (_req, res) => {
+    const listings = deps.store.listListings().map((l) => ({
+      listingId: l.id,
+      sellerId: l.seller_id,
+      creditBatchId: l.credit_batch_id,
+      quantity: l.quantity_total,
+      quantityRemaining: l.quantity_remaining,
+      priceStroops: l.price_stroops,
+      createdAt: l.created_at,
+    }));
+    res.json({ listings });
+  });
+
+  // Public price query. Backed by the oracle feed in production; served
+  // from the simulated feed here. Classified as an expensive on-chain read
+  // for rate-limiting purposes.
+  router.get('/prices', (_req, res) => {
+    res.json({
+      pair: 'CARBON/XLM',
+      priceStroops: 5_000_000,
+      source: 'simulated-oracle',
+      updatedAt: deps.config.now(),
+    });
+  });
+
   router.post(
     '/listings',
     idempotent(deps, {

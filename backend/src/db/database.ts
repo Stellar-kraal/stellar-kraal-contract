@@ -196,6 +196,12 @@ export class Store {
       | undefined;
   }
 
+  listListings(limit = 100): ListingRow[] {
+    return this.db
+      .prepare('SELECT * FROM listings ORDER BY created_at DESC, id LIMIT ?')
+      .all(limit) as ListingRow[];
+  }
+
   insertPurchase(row: PurchaseRow): void {
     this.db
       .prepare(

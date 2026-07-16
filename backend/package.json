@@ -8,17 +8,20 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "loadtest": "node loadtest/ratelimit.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "ioredis": "^5.6.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "autocannon": "^7.15.0",
     "@types/express": "^4.17.23",
     "@types/jest": "^29.5.14",
     "@types/node": "^20.19.0",

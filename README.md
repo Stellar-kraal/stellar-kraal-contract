@@ -237,6 +237,7 @@ npm run test:frontend
 | [Liquidation Mechanism](docs/protocol/liquidation.md) | Health factor formula, liquidation threshold, partial liquidation examples |
 | [Smart Contract Interface](docs/contracts/stellarkraal-interface.md) | Soroban contract public API, error codes, state changes, and CLI invocation guide |
 | [Idempotency Layer](docs/backend/idempotency.md) | Idempotency-Key protocol for critical financial endpoints, record schema, TTL, and partial-failure reconciliation |
+| [Rate Limiting](docs/backend/rate-limiting.md) | Multi-tier sliding-window rate limits for the public API, RFC 7807 responses, Redis failover, and load-test instructions |
 
 ## Architecture Decision Records
 
