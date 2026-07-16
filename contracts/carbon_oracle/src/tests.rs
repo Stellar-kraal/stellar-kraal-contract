@@ -23,7 +23,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
 use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
 
-use crate::{CarbonOracle, CarbonOracleClient, Error, SCHEMA_VERSION};
+use crate::{CarbonOracle, CarbonOracleClient, CommitmentState, Error, SCHEMA_VERSION};
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -88,7 +88,7 @@ impl Fixture {
         let oracle = Address::generate(&env);
         let signing_key = gen_key();
         let pubkey_bytes = signing_key.verifying_key().to_bytes();
-        client.initialize(&admin, &n32(&env, &pubkey_bytes));
+        client.initialize(&admin, &n32(&env, &pubkey_bytes), &10); // challenge window of 10 ledgers
 
         let mut script_hash = [0u8; 32];
         script_hash[0] = 0xDE;
@@ -319,7 +319,7 @@ fn double_initialization_rejected() {
     let pubkey_bytes = f.signing_key.verifying_key().to_bytes();
     let result = f
         .client
-        .try_initialize(&f.admin, &n32(&f.env, &pubkey_bytes));
+        .try_initialize(&f.admin, &n32(&f.env, &pubkey_bytes), &10);
     assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
 }
 
@@ -418,4 +418,111 @@ fn multiple_feeds_stored_independently() {
     let entry_b = f.client.get_price(&n32(&f.env, &feed_b));
     assert_eq!(entry_a.output_value, 111);
     assert_eq!(entry_b.output_value, 222);
+}
+
+// ── Commit-Reveal tests ───────────────────────────────────────────────────────
+
+#[test]
+fn commit_and_reveal_success() {
+    let f = Fixture::new();
+    let output_value: i64 = 555_555;
+    let timestamp_utc: i64 = 1_800_000_000;
+    let salt = [0x77u8; 32];
+
+    // Compute commitment hash
+    let mut payload = soroban_sdk::Bytes::new(&f.env);
+    payload.append(&n32(&f.env, &f.script_hash).into());
+    payload.append(&n32(&f.env, &f.input_params_hash).into());
+    for b in output_value.to_be_bytes() { payload.push_back(b); }
+    for b in timestamp_utc.to_be_bytes() { payload.push_back(b); }
+    payload.append(&n32(&f.env, &f.feed_id).into());
+    payload.append(&n32(&f.env, &salt).into());
+    let commitment_hash = f.env.crypto().sha256(&payload);
+
+    f.client.commit_price(&f.oracle, &n32(&f.env, &f.feed_id), &commitment_hash);
+
+    let commitment = f.client.get_commitment(&n32(&f.env, &f.feed_id));
+    assert_eq!(commitment.state, CommitmentState::ChallengeWindow);
+
+    // Fast forward ledger sequence to bypass challenge window (duration is 10)
+    let current_seq = f.env.ledger().sequence();
+    
+    // Attempt reveal before window expires (should fail)
+    let attestation_payload = build_payload_bytes(&f.script_hash, &f.input_params_hash, output_value, timestamp_utc, &f.feed_id);
+    let sig = sign_payload(&f.signing_key, &attestation_payload);
+
+    let early_reveal = f.client.try_reveal_price(
+        &f.oracle,
+        &n32(&f.env, &f.feed_id),
+        &n32(&f.env, &f.script_hash),
+        &n32(&f.env, &f.input_params_hash),
+        &output_value,
+        &timestamp_utc,
+        &n32(&f.env, &salt),
+        &n64(&f.env, &sig)
+    );
+    assert_eq!(early_reveal, Err(Ok(Error::ChallengeWindowNotExpired)));
+
+    f.env.ledger().set_sequence_number(current_seq + 11);
+
+    f.client.reveal_price(
+        &f.oracle,
+        &n32(&f.env, &f.feed_id),
+        &n32(&f.env, &f.script_hash),
+        &n32(&f.env, &f.input_params_hash),
+        &output_value,
+        &timestamp_utc,
+        &n32(&f.env, &salt),
+        &n64(&f.env, &sig)
+    );
+
+    let revealed_commitment = f.client.get_commitment(&n32(&f.env, &f.feed_id));
+    assert_eq!(revealed_commitment.state, CommitmentState::Revealed);
+
+    let price = f.client.get_price(&n32(&f.env, &f.feed_id));
+    assert_eq!(price.output_value, output_value);
+}
+
+#[test]
+fn challenge_during_window_succeeds() {
+    let f = Fixture::new();
+    let output_value: i64 = 555_555;
+    let timestamp_utc: i64 = 1_800_000_000;
+    let salt = [0x77u8; 32];
+
+    let mut payload = soroban_sdk::Bytes::new(&f.env);
+    payload.append(&n32(&f.env, &f.script_hash).into());
+    payload.append(&n32(&f.env, &f.input_params_hash).into());
+    for b in output_value.to_be_bytes() { payload.push_back(b); }
+    for b in timestamp_utc.to_be_bytes() { payload.push_back(b); }
+    payload.append(&n32(&f.env, &f.feed_id).into());
+    payload.append(&n32(&f.env, &salt).into());
+    let commitment_hash = f.env.crypto().sha256(&payload);
+
+    f.client.commit_price(&f.oracle, &n32(&f.env, &f.feed_id), &commitment_hash);
+
+    let challenger = Address::generate(&f.env);
+    f.client.challenge_price(&challenger, &n32(&f.env, &f.feed_id), &999_999);
+
+    let commitment = f.client.get_commitment(&n32(&f.env, &f.feed_id));
+    assert_eq!(commitment.state, CommitmentState::Disputed);
+
+    // Now reveal should fail because state is not ChallengeWindow
+    let attestation_payload = build_payload_bytes(&f.script_hash, &f.input_params_hash, output_value, timestamp_utc, &f.feed_id);
+    let sig = sign_payload(&f.signing_key, &attestation_payload);
+
+    let current_seq = f.env.ledger().sequence();
+    f.env.ledger().set_sequence_number(current_seq + 11);
+
+    let reveal_res = f.client.try_reveal_price(
+        &f.oracle,
+        &n32(&f.env, &f.feed_id),
+        &n32(&f.env, &f.script_hash),
+        &n32(&f.env, &f.input_params_hash),
+        &output_value,
+        &timestamp_utc,
+        &n32(&f.env, &salt),
+        &n64(&f.env, &sig)
+    );
+    assert_eq!(reveal_res, Err(Ok(Error::InvalidCommitmentState)));
 }

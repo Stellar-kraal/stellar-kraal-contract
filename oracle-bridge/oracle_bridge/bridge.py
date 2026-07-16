@@ -45,6 +45,14 @@ class SubmissionClient(Protocol):
         """
         ...
 
+    def commit_price(self, feed_id: str | bytes, commitment_hash: bytes) -> str:
+        """Submit a price commitment."""
+        ...
+
+    def reveal_price(self, attestation: SignedAttestation, salt: bytes) -> str:
+        """Submit a price reveal."""
+        ...
+
 
 # ── GEE result model ──────────────────────────────────────────────────────────
 
@@ -178,6 +186,55 @@ class OracleBridge:
             feed_id=result.feed_id,
         )
         tx_ref = self._client.submit_price(attestation)
+        return attestation, tx_ref
+
+    def commit(self, result: GEEResult) -> tuple[bytes, str]:
+        """
+        Commit to a result by computing its commitment hash and submitting it.
+        Generates a random 32-byte salt.
+
+        Returns
+        -------
+        (salt, tx_ref)
+            The generated salt and the transaction reference.
+        """
+        import os
+        from oracle_bridge.attestation import canonical_params_hash, pad_feed_id
+
+        salt = os.urandom(32)
+        feed_id = pad_feed_id(result.feed_id)
+        input_params_hash = canonical_params_hash(result.input_params)
+
+        payload = b''
+        payload += result.script_hash
+        payload += input_params_hash
+        payload += result.output_value.to_bytes(8, byteorder='big', signed=True)
+        payload += result.timestamp_utc.to_bytes(8, byteorder='big', signed=True)
+        payload += feed_id
+        payload += salt
+
+        commitment_hash = sha256(payload)
+        tx_ref = self._client.commit_price(result.feed_id, commitment_hash)
+
+        return salt, tx_ref
+
+    def reveal(self, result: GEEResult, salt: bytes) -> tuple[SignedAttestation, str]:
+        """
+        Reveal a previously committed result.
+
+        Returns
+        -------
+        (attestation, tx_ref)
+            The signed attestation that was produced and the transaction reference.
+        """
+        attestation = self._signer.attest(
+            script_hash=result.script_hash,
+            input_params=result.input_params,
+            output_value=result.output_value,
+            timestamp_utc=result.timestamp_utc,
+            feed_id=result.feed_id,
+        )
+        tx_ref = self._client.reveal_price(attestation, salt)
         return attestation, tx_ref
 
     def aggregate_and_submit(
