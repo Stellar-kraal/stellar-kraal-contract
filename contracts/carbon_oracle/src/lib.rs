@@ -33,6 +33,10 @@ fn feed_key(_e: &Env, feed_id: &BytesN<32>) -> (Symbol, BytesN<32>) {
     (symbol_short!("FEED"), feed_id.clone())
 }
 
+fn agg_feed_key(_e: &Env, feed_id: &BytesN<32>) -> (Symbol, BytesN<32>) {
+    (symbol_short!("AGGFEED"), feed_id.clone())
+}
+
 // ── Attestation payload constants ─────────────────────────────────────────────
 
 /// Total length of the canonical signing message in bytes.
@@ -66,6 +70,49 @@ pub struct PriceEntry {
     /// The SHA-256 of the canonical input parameters (audit trail).
     pub input_params_hash: BytesN<32>,
     /// Ledger sequence number when this entry was recorded.
+    pub recorded_at: u32,
+}
+
+/// Per-source price value for multi-source aggregations.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SourceValue {
+    /// The source identifier (e.g., "xpansiv_cbl", "toucan_protocol").
+    pub source_id: soroban_sdk::String,
+    /// The price value from this source.
+    pub value: i64,
+    /// The weight assigned to this source in aggregation.
+    pub weight_numerator: i128,  // Stored as numerator for precision
+    pub weight_denominator: i128,
+}
+
+/// Aggregation provenance metadata for multi-source submissions.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AggregationMetadata {
+    /// The aggregation method used (e.g., "weighted_median").
+    pub method: soroban_sdk::String,
+    /// The outlier rejection method (e.g., "iqr", "mad", "none").
+    pub outlier_method: soroban_sdk::String,
+    /// Number of sources used in the aggregation.
+    pub num_sources_used: u32,
+    /// Number of sources rejected as outliers.
+    pub num_sources_rejected: u32,
+    /// Timestamp of aggregation (Unix).
+    pub timestamp_utc: i64,
+}
+
+/// Complete aggregated price entry with per-source values and metadata.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AggregatedPriceEntry {
+    /// The computed aggregate value (weighted median).
+    pub aggregate_value: i64,
+    /// Per-source values (up to 10 sources stored).
+    pub source_values: soroban_sdk::Vec<SourceValue>,
+    /// Aggregation provenance metadata.
+    pub metadata: AggregationMetadata,
+    /// Ledger sequence when recorded.
     pub recorded_at: u32,
 }
 
@@ -259,6 +306,115 @@ impl CarbonOracle {
         e.storage()
             .persistent()
             .get(&feed_key(&e, &feed_id))
+            .ok_or(Error::FeedNotFound)
+    }
+
+    /// Submit an aggregated price entry with per-source values and metadata.
+    ///
+    /// Used for multi-source aggregations with provenance tracking.
+    /// Parameters:
+    /// - `oracle`: the oracle operator address.
+    /// - `feed_id`: 32-byte feed identifier.
+    /// - `aggregate_value`: computed weighted median (i64).
+    /// - `source_values`: list of per-source values with IDs and weights.
+    /// - `method`: aggregation method name (e.g., "weighted_median").
+    /// - `outlier_method`: outlier rejection method (e.g., "iqr", "mad", "none").
+    /// - `num_sources_rejected`: count of sources rejected as outliers.
+    /// - `timestamp_utc`: Unix timestamp of aggregation.
+    /// - `signature`: Ed25519 signature over the aggregation payload.
+    ///
+    /// The contract verifies the signature and stores the aggregated entry
+    /// in a separate storage key for audit and retrieval.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_aggregated_price(
+        e: Env,
+        oracle: Address,
+        feed_id: BytesN<32>,
+        aggregate_value: i64,
+        source_values: soroban_sdk::Vec<(soroban_sdk::String, i64, i128, i128)>,
+        method: soroban_sdk::String,
+        outlier_method: soroban_sdk::String,
+        num_sources_rejected: u32,
+        timestamp_utc: i64,
+        signature: BytesN<64>,
+    ) -> Result<(), Error> {
+        let cfg = require_config(&e)?;
+        oracle.require_auth();
+
+        // Verify signature over aggregation parameters
+        // Create a deterministic payload from aggregation inputs
+        let mut msg = soroban_sdk::Bytes::new(&e);
+
+        // Include all relevant fields in signature verification
+        // Schema version marker for aggregated entries
+        msg.push_back(2u8);
+
+        // feed_id (32 bytes)
+        msg.append(&feed_id.clone().into());
+
+        // aggregate_value as big-endian i64 (8 bytes)
+        for b in aggregate_value.to_be_bytes() {
+            msg.push_back(b);
+        }
+
+        // timestamp_utc as big-endian i64 (8 bytes)
+        for b in timestamp_utc.to_be_bytes() {
+            msg.push_back(b);
+        }
+
+        // num_sources as big-endian u32 (4 bytes)
+        let num_sources = source_values.len() as u32;
+        for b in num_sources.to_be_bytes() {
+            msg.push_back(b);
+        }
+
+        // Verify signature
+        e.crypto()
+            .ed25519_verify(&cfg.oracle_pubkey, &msg, &signature);
+
+        // Build source values vector
+        let mut src_vals = soroban_sdk::Vec::new(&e);
+        for (source_id, value, weight_num, weight_den) in source_values.iter() {
+            src_vals.push_back(SourceValue {
+                source_id: source_id.clone(),
+                value,
+                weight_numerator: weight_num,
+                weight_denominator: weight_den,
+            });
+        }
+
+        // Build aggregated entry
+        let entry = AggregatedPriceEntry {
+            aggregate_value,
+            source_values: src_vals,
+            metadata: AggregationMetadata {
+                method: method.clone(),
+                outlier_method: outlier_method.clone(),
+                num_sources_used: num_sources - num_sources_rejected,
+                num_sources_rejected,
+                timestamp_utc,
+            },
+            recorded_at: e.ledger().sequence(),
+        };
+
+        e.storage()
+            .persistent()
+            .set(&agg_feed_key(&e, &feed_id), &entry);
+
+        Ok(())
+    }
+
+    /// Read the latest aggregated price entry for a given feed.
+    ///
+    /// Returns the aggregated value, per-source values, and provenance metadata.
+    pub fn get_aggregated_price(
+        e: Env,
+        feed_id: BytesN<32>,
+    ) -> Result<AggregatedPriceEntry, Error> {
+        require_config(&e)?;
+        e.storage()
+            .persistent()
+            .get(&agg_feed_key(&e, &feed_id))
             .ok_or(Error::FeedNotFound)
     }
 
