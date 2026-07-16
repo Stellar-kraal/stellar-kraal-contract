@@ -232,6 +232,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "carbon-registry"
+version = "0.2.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
