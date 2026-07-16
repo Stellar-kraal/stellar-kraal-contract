@@ -1,5 +1,5 @@
 [package]
-name = "carbon_marketplace"
+name = "carbon_registry"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,8 +11,6 @@ soroban-sdk = { version = "22.0.0", features = ["alloc"] }
 
 [dev-dependencies]
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }
-carbon_registry = { path = "../carbon_registry" }
-carbon_credit = { path = "../carbon_credit" }
 
 [profile.release]
 opt-level = "z"

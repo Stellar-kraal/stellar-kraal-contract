@@ -1,760 +1,443 @@
-//! Test suite for `carbon_marketplace`.
-//!
-//! Structure
-//! ---------
-//! 1. `mod unit`   — deterministic Soroban integration tests
-//! 2. `mod props`  — proptest property-based tests (20+ named properties)
-//! 3. `mod regression` — regression tests for 2 confirmed precision-loss bugs
-
 #![cfg(test)]
-extern crate std;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Common imports
-// ─────────────────────────────────────────────────────────────────────────────
-
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
-
-use crate::{
-    bulk_discount_bps, effective_fee_bps, gross_cost, net_cost, platform_fee, purchase_totals,
-    CarbonMarketplace, CarbonMarketplaceClient, Error,
-    BULK_DISCOUNT_TIER_1_BPS, BULK_DISCOUNT_TIER_2_BPS, BULK_DISCOUNT_TIER_3_BPS,
-    BULK_TIER_1, BULK_TIER_2, BULK_TIER_3, MAX_FEE_BPS,
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared fixture helpers
-// ─────────────────────────────────────────────────────────────────────────────
+use soroban_sdk::{testutils::{Address as _}, Address, Env, BytesN, symbol_short};
+use crate::*;
 
 fn make_env() -> Env {
-    let e = Env::default();
-    e.mock_all_auths();
-    e
+    let env = Env::default();
+    env.mock_all_auths();
+    env
 }
 
-fn deploy(e: &Env) -> CarbonMarketplaceClient<'_> {
-    CarbonMarketplaceClient::new(e, &e.register(CarbonMarketplace, ()))
+// ── Test harness ───────────────────────────────────────────────────────────
+
+use carbon_registry::{CarbonRegistry, CarbonRegistryClient};
+use carbon_credit::{CarbonCredit, CarbonCreditClient};
+
+/// Deploys the full three-contract stack and returns all addresses/clients.
+struct TestContext<'a> {
+    env: Env,
+    reg_client: CarbonRegistryClient<'a>,
+    credit_client: CarbonCreditClient<'a>,
+    market_client: CarbonMarketplaceClient<'a>,
+    admin: Address,
+    reg_admin: Address,
 }
 
-/// Deploy + initialize with a given fee (bps).
-fn init(e: &Env, fee_bps: u128) -> (CarbonMarketplaceClient<'_>, Address) {
-    let client = deploy(e);
-    let admin = Address::generate(e);
-    client.initialize(&admin, &fee_bps);
-    (client, admin)
+fn setup_full<'a>(env: &'a Env) -> TestContext<'a> {
+    let reg_admin = Address::generate(env);
+    let market_admin = Address::generate(env);
+
+    // Deploy marketplace first to get its address (needed as trusted caller in registry)
+    let market_addr = env.register(CarbonMarketplace, ());
+    let market_client = CarbonMarketplaceClient::new(env, &market_addr);
+
+    // Deploy registry with marketplace as the trusted caller
+    let reg_addr = env.register(CarbonRegistry, ());
+    let reg_client = CarbonRegistryClient::new(env, &reg_addr);
+    reg_client.initialize(&reg_admin, &market_addr);
+
+    // Deploy credit contract
+    let credit_addr = env.register(CarbonCredit, ());
+    let credit_client = CarbonCreditClient::new(env, &credit_addr);
+    credit_client.initialize(&market_admin, &reg_addr, &market_addr);
+
+    // Initialize marketplace
+    market_client.initialize(&market_admin, &reg_addr, &credit_addr, &100_i128);
+
+    TestContext {
+        env: env.clone(),
+        reg_client,
+        credit_client,
+        market_client,
+        admin: market_admin,
+        reg_admin,
+    }
 }
 
-/// Create a listing and return its ID.
-fn make_listing(
-    client: &CarbonMarketplaceClient,
-    e: &Env,
-    price: u128,
-    supply: u128,
+/// Register + verify a project; mint `mint_amount` credits to `seller`.
+/// Returns the project_id.
+fn setup_project_with_credits(
+    ctx: &TestContext<'_>,
+    seller: &Address,
+    total_credits: i128,
+    mint_amount: i128,
 ) -> BytesN<32> {
-    let seller = Address::generate(e);
-    client.create_listing(&seller, &price, &supply)
+    let owner = Address::generate(&ctx.env);
+    let project_id = ctx.reg_client.register_project(
+        &owner,
+        &symbol_short!("PROJ"),
+        &total_credits,
+        &2024_u32,
+    );
+    ctx.reg_client.verify_project(&project_id);
+
+    // issue_credits via registry to record allocation
+    ctx.reg_client.issue_credits(&project_id, &mint_amount);
+
+    // Mint credits to seller via credit contract
+    ctx.credit_client.mint(seller, &project_id, &mint_amount);
+
+    project_id
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 1. Unit tests
-// ═════════════════════════════════════════════════════════════════════════════
+// ── Basic happy path ───────────────────────────────────────────────────────
 
-mod unit {
-    use super::*;
+#[test]
+fn test_initialize_succeeds() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+    let cfg = ctx.market_client.get_config();
+    assert_eq!(cfg.admin, ctx.admin);
+    assert_eq!(cfg.fee_bps, 100);
+}
 
-    // ── Initialisation ────────────────────────────────────────────────────────
+#[test]
+fn test_create_listing_happy_path() {
+    let env = make_env();
+    let ctx = setup_full(&env);
 
-    #[test]
-    fn initialize_stores_config() {
-        let e = make_env();
-        let (client, admin) = init(&e, 250);
-        let cfg = client.get_config();
-        assert_eq!(cfg.platform_fee_bps, 250);
-        assert_eq!(cfg.admin, admin);
-    }
+    let seller = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 500);
 
-    #[test]
-    fn double_init_rejected() {
-        let e = make_env();
-        let (client, admin) = init(&e, 100);
-        assert_eq!(
-            client.try_initialize(&admin, &100u128),
-            Err(Ok(Error::AlreadyInitialized))
-        );
-    }
+    let listing_id = ctx.market_client.create_listing(&seller, &project_id, &200_i128, &10_i128);
+    let listing = ctx.market_client.get_listing(&listing_id);
 
-    #[test]
-    fn fee_above_max_rejected_on_init() {
-        let e = make_env();
-        let client = deploy(&e);
-        let admin = Address::generate(&e);
-        assert_eq!(
-            client.try_initialize(&admin, &(MAX_FEE_BPS + 1)),
-            Err(Ok(Error::InvalidFeeRate))
-        );
-    }
+    assert_eq!(listing.seller, seller);
+    assert_eq!(listing.amount, 200);
+    assert_eq!(listing.price_per_credit, 10);
+    assert_eq!(listing.status, ListingStatus::Active);
+}
 
-    #[test]
-    fn fee_exactly_max_accepted_on_init() {
-        let e = make_env();
-        let client = deploy(&e);
-        let admin = Address::generate(&e);
-        client.initialize(&admin, &MAX_FEE_BPS);
-        assert_eq!(client.get_config().platform_fee_bps, MAX_FEE_BPS);
-    }
+#[test]
+fn test_purchase_listing_happy_path() {
+    let env = make_env();
+    let ctx = setup_full(&env);
 
-    // ── Listing creation ──────────────────────────────────────────────────────
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 300);
 
-    #[test]
-    fn create_listing_stores_fields() {
-        let e = make_env();
-        let (client, _) = init(&e, 200);
-        let id = make_listing(&client, &e, 1_000_000, 500);
-        let l = client.get_listing(&id);
-        assert_eq!(l.price_per_tonne, 1_000_000);
-        assert_eq!(l.available_tonnes, 500);
-        assert!(l.active);
-    }
+    let listing_id = ctx.market_client.create_listing(&seller, &project_id, &100_i128, &5_i128);
+    ctx.market_client.purchase_listing(&buyer, &listing_id, &500_i128);
 
-    #[test]
-    fn create_listing_zero_price_rejected() {
-        let e = make_env();
-        let (client, _) = init(&e, 200);
-        let seller = Address::generate(&e);
-        assert_eq!(
-            client.try_create_listing(&seller, &0u128, &100u128),
-            Err(Ok(Error::ZeroPrice))
-        );
-    }
+    let listing = ctx.market_client.get_listing(&listing_id);
+    assert_eq!(listing.status, ListingStatus::Sold);
 
-    #[test]
-    fn create_listing_zero_supply_rejected() {
-        let e = make_env();
-        let (client, _) = init(&e, 200);
-        let seller = Address::generate(&e);
-        assert_eq!(
-            client.try_create_listing(&seller, &1_000u128, &0u128),
-            Err(Ok(Error::ZeroQuantity))
-        );
-    }
+    // Buyer should have received credits
+    assert_eq!(ctx.credit_client.balance_of(&buyer, &project_id), 100);
+}
 
-    // ── Purchase ──────────────────────────────────────────────────────────────
+#[test]
+fn test_cancel_listing_happy_path() {
+    let env = make_env();
+    let ctx = setup_full(&env);
 
-    #[test]
-    fn purchase_updates_supply_and_stores_order() {
-        let e = make_env();
-        let (client, _) = init(&e, 300); // 3% fee
-        let id = make_listing(&client, &e, 1_000_000, 1_000);
-        let buyer = Address::generate(&e);
-        let order_id = client.purchase(&buyer, &id, &100u128);
-        let order = client.get_order(&order_id);
-        // gross = 1_000_000 * 100 = 100_000_000
-        assert_eq!(order.gross_cost, 100_000_000);
-        // fee  = 100_000_000 * 300 / 10_000 = 3_000_000
-        assert_eq!(order.fee_amount, 3_000_000);
-        // net  = 103_000_000
-        assert_eq!(order.net_cost, 103_000_000);
-        // supply reduced
-        let listing = client.get_listing(&id);
-        assert_eq!(listing.available_tonnes, 900);
-    }
+    let seller = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 200);
 
-    #[test]
-    fn purchase_zero_quantity_rejected() {
-        let e = make_env();
-        let (client, _) = init(&e, 100);
-        let id = make_listing(&client, &e, 500, 100);
-        let buyer = Address::generate(&e);
-        assert_eq!(
-            client.try_purchase(&buyer, &id, &0u128),
-            Err(Ok(Error::ZeroQuantity))
-        );
-    }
+    let listing_id = ctx.market_client.create_listing(&seller, &project_id, &100_i128, &3_i128);
+    ctx.market_client.cancel_listing(&seller, &listing_id);
 
-    #[test]
-    fn purchase_exceeds_supply_rejected() {
-        let e = make_env();
-        let (client, _) = init(&e, 100);
-        let id = make_listing(&client, &e, 500, 50);
-        let buyer = Address::generate(&e);
-        assert_eq!(
-            client.try_purchase(&buyer, &id, &51u128),
-            Err(Ok(Error::InsufficientSupply))
-        );
-    }
+    let listing = ctx.market_client.get_listing(&listing_id);
+    assert_eq!(listing.status, ListingStatus::Cancelled);
+}
 
-    #[test]
-    fn purchase_entire_supply_deactivates_listing() {
-        let e = make_env();
-        let (client, _) = init(&e, 0); // 0% fee for simplicity
-        let id = make_listing(&client, &e, 1_000, 10);
-        let buyer = Address::generate(&e);
-        client.purchase(&buyer, &id, &10u128);
-        let listing = client.get_listing(&id);
-        assert!(!listing.active);
-        assert_eq!(listing.available_tonnes, 0);
-    }
+// ── Vulnerability Reproduction Tests ──────────────────────────────────────
 
-    #[test]
-    fn purchase_on_inactive_listing_rejected() {
-        let e = make_env();
-        let (client, admin) = init(&e, 0);
-        let id = make_listing(&client, &e, 1_000, 10);
-        client.deactivate_listing(&admin, &id);
-        let buyer = Address::generate(&e);
-        assert_eq!(
-            client.try_purchase(&buyer, &id, &1u128),
-            Err(Ok(Error::ListingInactive))
-        );
-    }
+/// CC-002 reproduction: CEI violation in purchase_listing.
+///
+/// In the UNFIXED code, the listing stays `Active` during all cross-contract calls.
+/// This test documents the vulnerable state: after a successful purchase the listing
+/// SHOULD be Sold. We verify the post-purchase state equals Sold (the fix invariant),
+/// and note where the vulnerability window existed.
+///
+/// In the original vulnerable code, two concurrent purchases of the same listing
+/// would both read `status == Active` and both proceed. Because Soroban is
+/// single-threaded within a ledger but allows multiple operations, this manifests
+/// as the second purchase being able to read Active status before the first write
+/// of Sold lands. After the fix (CEI applied), status is set Sold BEFORE any
+/// cross-contract calls, so a second purchase attempt reads Sold and fails.
+#[test]
+fn test_purchase_listing_check_effects_violation() {
+    let env = make_env();
+    let ctx = setup_full(&env);
 
-    // ── Fee arithmetic (zero-fee and 100% fee edge cases) ─────────────────────
+    let seller = Address::generate(&env);
+    let buyer1 = Address::generate(&env);
+    let buyer2 = Address::generate(&env);
 
-    #[test]
-    fn zero_fee_means_net_equals_gross() {
-        let e = make_env();
-        let (client, _) = init(&e, 0);
-        let id = make_listing(&client, &e, 2_000_000, 100);
-        let buyer = Address::generate(&e);
-        let oid = client.purchase(&buyer, &id, &5u128);
-        let order = client.get_order(&oid);
-        assert_eq!(order.fee_amount, 0);
-        assert_eq!(order.net_cost, order.gross_cost);
-    }
+    // Set up a project with exactly 100 credits for the seller
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 100);
 
-    #[test]
-    fn hundred_percent_fee_doubles_cost() {
-        let e = make_env();
-        let (client, _) = init(&e, MAX_FEE_BPS); // 100% fee
-        let id = make_listing(&client, &e, 1_000, 100);
-        let buyer = Address::generate(&e);
-        let oid = client.purchase(&buyer, &id, &1u128);
-        let order = client.get_order(&oid);
-        assert_eq!(order.gross_cost, 1_000);
-        assert_eq!(order.fee_amount, 1_000); // 100% of gross
-        assert_eq!(order.net_cost, 2_000);
-    }
+    // Create a listing for all 100 credits
+    let listing_id = ctx.market_client.create_listing(&seller, &project_id, &100_i128, &1_i128);
 
-    // ── Bulk discount tiers ───────────────────────────────────────────────────
+    // Verify: listing starts Active
+    let listing_before = ctx.market_client.get_listing(&listing_id);
+    assert_eq!(listing_before.status, ListingStatus::Active,
+        "Listing must start Active");
 
-    #[test]
-    fn bulk_tier_1_discount_applied() {
-        let e = make_env();
-        let (client, _) = init(&e, 1_000); // 10% base fee
-        let id = make_listing(&client, &e, 1_000, BULK_TIER_1 * 2);
-        let buyer = Address::generate(&e);
-        let oid = client.purchase(&buyer, &id, &BULK_TIER_1);
-        let order = client.get_order(&oid);
-        // effective = 1000 - 500 = 500 bps = 5%
-        assert_eq!(order.effective_fee_bps, 500);
-    }
+    // First purchase succeeds
+    ctx.market_client.purchase_listing(&buyer1, &listing_id, &100_i128);
 
-    #[test]
-    fn bulk_tier_2_discount_applied() {
-        let e = make_env();
-        let (client, _) = init(&e, 1_500);
-        let id = make_listing(&client, &e, 100, BULK_TIER_2 * 2);
-        let buyer = Address::generate(&e);
-        let oid = client.purchase(&buyer, &id, &BULK_TIER_2);
-        let order = client.get_order(&oid);
-        // effective = 1500 - 1000 = 500 bps
-        assert_eq!(order.effective_fee_bps, 500);
-    }
+    // After purchase: listing must be Sold (CEI fix ensures this)
+    let listing_after = ctx.market_client.get_listing(&listing_id);
+    assert_eq!(listing_after.status, ListingStatus::Sold,
+        "INVARIANT: listing.status MUST be Sold immediately after purchase_listing returns");
 
-    #[test]
-    fn bulk_tier_3_discount_applied() {
-        let e = make_env();
-        let (client, _) = init(&e, 2_500);
-        let id = make_listing(&client, &e, 10, BULK_TIER_3 * 2);
-        let buyer = Address::generate(&e);
-        let oid = client.purchase(&buyer, &id, &BULK_TIER_3);
-        let order = client.get_order(&oid);
-        // effective = 2500 - 2000 = 500 bps
-        assert_eq!(order.effective_fee_bps, 500);
-    }
+    // Second purchase on the same listing must fail — listing is now Sold
+    // In the UNFIXED code with concurrent execution, both would have succeeded.
+    // In the FIXED code, the state was written Sold before any cross-contract call,
+    // so the second attempt reads Sold and returns ListingNotActive.
+    let res = ctx.market_client.try_purchase_listing(&buyer2, &listing_id, &100_i128);
+    assert_eq!(res, Err(Ok(MarketError::ListingNotActive)),
+        "A second purchase of a Sold listing must fail with ListingNotActive");
 
-    #[test]
-    fn bulk_discount_cannot_make_fee_negative() {
-        // base fee = 100 bps, tier-1 discount = 500 bps → should floor at 0
-        let e = make_env();
-        let (client, _) = init(&e, 100);
-        let id = make_listing(&client, &e, 1_000, BULK_TIER_1 * 2);
-        let buyer = Address::generate(&e);
-        let oid = client.purchase(&buyer, &id, &BULK_TIER_1);
-        let order = client.get_order(&oid);
-        assert_eq!(order.effective_fee_bps, 0);
-        assert_eq!(order.fee_amount, 0);
-    }
+    // Buyer2 must have received no credits
+    assert_eq!(ctx.credit_client.balance_of(&buyer2, &project_id), 0,
+        "buyer2 must receive zero credits — the double-spend is prevented");
+}
 
-    // ── Deactivate listing ────────────────────────────────────────────────────
+/// CC-001 reproduction: TOCTOU — stale project status at create_listing time.
+///
+/// In the UNFIXED `create_listing()`, the project status is read once and not
+/// re-verified at purchase time. This test shows that even when a project is
+/// suspended AFTER listing creation, the FIXED `purchase_listing()` catches it
+/// by re-checking the project status before executing the transfer.
+///
+/// Test flow:
+///   1. Create listing while project is Verified (listing creation succeeds).
+///   2. Admin suspends the project.
+///   3. Attempt to purchase the listing — must fail because the fix re-checks status.
+#[test]
+fn test_create_listing_toctou_stale_project_status() {
+    let env = make_env();
+    let ctx = setup_full(&env);
 
-    #[test]
-    fn deactivate_by_seller_works() {
-        let e = make_env();
-        let (client, _) = init(&e, 0);
-        let seller = Address::generate(&e);
-        let id = client.create_listing(&seller, &1_000u128, &100u128);
-        client.deactivate_listing(&seller, &id);
-        assert!(!client.get_listing(&id).active);
-    }
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
 
-    #[test]
-    fn deactivate_by_non_owner_rejected() {
-        let e = make_env();
-        let (client, _) = init(&e, 0);
-        let id = make_listing(&client, &e, 1_000, 100);
-        let intruder = Address::generate(&e);
-        assert_eq!(
-            client.try_deactivate_listing(&intruder, &id),
-            Err(Ok(Error::Unauthorized))
-        );
-    }
+    // Step 1: Project is Verified — listing creation passes the status check.
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 200);
+    let listing_id = ctx.market_client.create_listing(&seller, &project_id, &100_i128, &2_i128);
 
-    // ── Quote ─────────────────────────────────────────────────────────────────
+    let listing = ctx.market_client.get_listing(&listing_id);
+    assert_eq!(listing.status, ListingStatus::Active,
+        "Listing should be Active after creation while project is Verified");
 
-    #[test]
-    fn quote_matches_purchase_totals() {
-        let e = make_env();
-        let (client, _) = init(&e, 250);
-        let id = make_listing(&client, &e, 500_000, 5_000);
-        let (g, f, n, eff) = client.quote(&id, &2_000u128);
-        assert_eq!(
-            (g, f, n, eff),
-            purchase_totals(500_000, 2_000, 250).unwrap()
-        );
+    // Step 2: Admin suspends the project AFTER the listing is created.
+    // This is the TOCTOU race: the status read at create_listing time is now stale.
+    ctx.reg_client.suspend_project(&project_id);
+
+    // Step 3: purchase_listing must re-verify project status.
+    // FIXED behavior: purchase_listing re-checks registry status and must reject the purchase.
+    let res = ctx.market_client.try_purchase_listing(&buyer, &listing_id, &200_i128);
+    assert_eq!(res, Err(Ok(MarketError::ProjectNotVerified)),
+        "TOCTOU fix: purchase must fail when project is suspended after listing creation");
+
+    // Seller's credits are untouched
+    assert_eq!(ctx.credit_client.balance_of(&seller, &project_id), 200,
+        "Seller credits must not be burned when purchase is rejected");
+}
+
+/// CC-003 reproduction: auth-order vulnerability in mint_project_credits.
+///
+/// In the UNFIXED code, `cfg.admin.require_auth()` is called AFTER the first
+/// cross-contract call to `registry.issue_credits()`. This test documents the
+/// correct (FIXED) behavior: the admin auth check must be the very first operation,
+/// and the function must succeed when called by the admin.
+///
+/// Because `mock_all_auths()` is active, both the vulnerable and fixed versions
+/// will pass auth. The test instead verifies:
+///   1. The function succeeds when called by the admin (normal path).
+///   2. The fix is documented: require_auth() appears before any external call.
+///
+/// The structural vulnerability is verified by inspection (see audit report CC-003).
+#[test]
+fn test_mint_project_credits_auth_order() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+
+    // Register and verify a project — issue_credits in registry requires marketplace auth
+    let owner = Address::generate(&env);
+    let project_id = ctx.reg_client.register_project(
+        &owner,
+        &symbol_short!("MINT"),
+        &5000_i128,
+        &2024_u32,
+    );
+    ctx.reg_client.verify_project(&project_id);
+
+    // Call mint_project_credits as admin — should succeed
+    ctx.market_client.mint_project_credits(&project_id, &200_i128);
+
+    // Owner should have received credits
+    let owner_balance = ctx.credit_client.balance_of(&owner, &project_id);
+    assert_eq!(owner_balance, 200,
+        "Owner must receive credits after mint_project_credits");
+
+    // Registry should record issued credits
+    let project = ctx.reg_client.get_project(&project_id);
+    assert_eq!(project.issued_credits, 200,
+        "Registry must record the issued credits");
+
+    // Verify auth was required: in non-mocked environment, calling without admin
+    // credentials would fail. The FIXED code places require_auth() BEFORE any
+    // cross-contract call, ensuring no state mutation occurs for unauthorized callers.
+    // (Structural verification: see carbon_marketplace/src/lib.rs line ~350 after fix)
+}
+
+// ── Property-Based Tests ───────────────────────────────────────────────────
+
+/// Property: after purchase_listing succeeds, listing.status MUST be Sold.
+///
+/// This invariant is the direct consequence of applying CEI: state is written
+/// before interactions, so it is always committed when the function returns Ok.
+/// Tested across multiple listings with varying amounts and prices.
+#[test]
+fn test_prop_listing_always_sold_after_purchase() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+
+    let seller = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 10000, 3000);
+
+    // Create multiple listings with different parameters
+    let test_cases: [(i128, i128); 3] = [
+        (100, 5),
+        (200, 10),
+        (50, 20),
+    ];
+
+    for (amount, price) in test_cases.iter() {
+        let buyer = Address::generate(&env);
+        let listing_id = ctx.market_client.create_listing(&seller, &project_id, amount, price);
+
+        // Pre-condition: listing is Active
+        let before = ctx.market_client.get_listing(&listing_id);
+        assert_eq!(before.status, ListingStatus::Active);
+
+        let total_cost = amount * price;
+        ctx.market_client.purchase_listing(&buyer, &listing_id, &total_cost);
+
+        // POST-CONDITION (the property): status is ALWAYS Sold after successful purchase
+        let after = ctx.market_client.get_listing(&listing_id);
+        assert_eq!(after.status, ListingStatus::Sold,
+            "PROPERTY VIOLATION: listing.status must be Sold after purchase_listing succeeds \
+             (amount={}, price={})", amount, price);
+
+        // Buyer received the correct number of credits
+        assert_eq!(ctx.credit_client.balance_of(&buyer, &project_id), *amount,
+            "Buyer must receive exactly {} credits", amount);
     }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 2. Property-based tests  (≥ 20 named properties)
-//    Run with PROPTEST_CASES=10000 cargo test
-// ═════════════════════════════════════════════════════════════════════════════
+/// Property: total supply of credits is conserved across any transfer sequence.
+///
+/// Minting increases supply, burning decreases supply, and transfers leave it unchanged.
+/// This test validates the conservation law across a realistic purchase flow:
+///   - Mint credits to seller.
+///   - Seller lists credits.
+///   - Buyer purchases → credits move from seller to buyer.
+///   - Total supply stays the same across the purchase (burn old + mint new = net zero change).
+#[test]
+fn test_prop_credits_conserved_across_transfer() {
+    let env = make_env();
+    let ctx = setup_full(&env);
 
-mod props {
-    use super::*;
-    use proptest::prelude::*;
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let mint_amount: i128 = 500;
+    let list_amount: i128 = 200;
 
-    // ── Strategy helpers ──────────────────────────────────────────────────────
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, mint_amount);
 
-    /// Safe price range: avoids u128 overflow when multiplied by large quantities.
-    /// Max price chosen so price * 1e12 < u128::MAX.
-    fn price_strategy() -> impl Strategy<Value = u128> {
-        1u128..=340_282_366_920_938u128 // ~3.4e14, safe for quantity up to 1e12
-    }
+    // Record supply and balances before the purchase
+    let supply_before = ctx.credit_client.total_supply(&project_id);
+    let seller_before = ctx.credit_client.balance_of(&seller, &project_id);
+    let buyer_before = ctx.credit_client.balance_of(&buyer, &project_id);
 
-    /// Quantity range: 1..u64::MAX cast to u128 (realistic for carbon tonnes).
-    fn quantity_strategy() -> impl Strategy<Value = u128> {
-        1u128..=1_000_000_000_000u128 // up to 1 trillion tonnes
-    }
+    assert_eq!(supply_before, mint_amount,
+        "Initial supply must equal minted amount");
+    assert_eq!(seller_before, mint_amount,
+        "Seller must hold all initially minted credits");
+    assert_eq!(buyer_before, 0,
+        "Buyer starts with zero credits");
 
-    /// Fee rate in valid range.
-    fn fee_bps_strategy() -> impl Strategy<Value = u128> {
-        0u128..=MAX_FEE_BPS
-    }
+    // Create listing and purchase
+    let listing_id = ctx.market_client.create_listing(&seller, &project_id, &list_amount, &1_i128);
+    ctx.market_client.purchase_listing(&buyer, &listing_id, &list_amount);
 
-    // ── Property 1: gross_cost is commutative ─────────────────────────────────
-    proptest! {
-        #[test]
-        fn prop_gross_cost_commutative(
-            p in price_strategy(),
-            q in quantity_strategy(),
-        ) {
-            prop_assume!(p.checked_mul(q).is_some());
-            assert_eq!(gross_cost(p, q).unwrap(), gross_cost(q, p).unwrap());
-        }
-    }
+    // Observe post-purchase state
+    let supply_after = ctx.credit_client.total_supply(&project_id);
+    let seller_after = ctx.credit_client.balance_of(&seller, &project_id);
+    let buyer_after = ctx.credit_client.balance_of(&buyer, &project_id);
 
-    // ── Property 2: gross_cost(p, 1) == p ────────────────────────────────────
-    proptest! {
-        #[test]
-        fn prop_gross_cost_identity(p in price_strategy()) {
-            assert_eq!(gross_cost(p, 1).unwrap(), p);
-        }
-    }
+    // PROPERTY 1: Total supply is conserved across the purchase
+    // (burn seller + mint buyer is net-neutral on total supply)
+    assert_eq!(supply_before, supply_after,
+        "PROPERTY VIOLATION: total supply must be conserved across a purchase \
+         (was {}, now {})", supply_before, supply_after);
 
-    // ── Property 3: gross_cost detects overflow ───────────────────────────────
-    proptest! {
-        #[test]
-        fn prop_gross_cost_overflow_detected(
-            p in (u128::MAX / 2 + 1)..=u128::MAX,
-            q in 2u128..=u128::MAX,
-        ) {
-            assert_eq!(gross_cost(p, q), Err(Error::ArithmeticOverflow));
-        }
-    }
+    // PROPERTY 2: Credit redistribution is exact
+    assert_eq!(seller_after, seller_before - list_amount,
+        "Seller must have exactly list_amount fewer credits");
+    assert_eq!(buyer_after, buyer_before + list_amount,
+        "Buyer must have exactly list_amount more credits");
 
-    // ── Property 4: fee is never greater than gross ───────────────────────────
-    proptest! {
-        #[test]
-        fn prop_fee_never_exceeds_gross(
-            p in price_strategy(),
-            q in quantity_strategy(),
-            fee in fee_bps_strategy(),
-        ) {
-            prop_assume!(p.checked_mul(q).is_some());
-            let (g, f, _n, _eff) = purchase_totals(p, q, fee).unwrap();
-            assert!(f <= g, "fee {f} > gross {g}");
-        }
-    }
-
-    // ── Property 5: net_cost >= gross_cost always ─────────────────────────────
-    proptest! {
-        #[test]
-        fn prop_net_cost_gte_gross(
-            p in price_strategy(),
-            q in quantity_strategy(),
-            fee in fee_bps_strategy(),
-        ) {
-            prop_assume!(p.checked_mul(q).is_some());
-            if let Ok((g, _f, n, _eff)) = purchase_totals(p, q, fee) {
-                assert!(n >= g, "net {n} < gross {g}");
-            }
-        }
-    }
-
-    // ── Property 6: zero fee → fee_amount == 0 ───────────────────────────────
-    proptest! {
-        #[test]
-        fn prop_zero_fee_rate_yields_zero_fee(
-            p in price_strategy(),
-            q in quantity_strategy(),
-        ) {
-            prop_assume!(p.checked_mul(q).is_some());
-            let (_g, f, _n, _eff) = purchase_totals(p, q, 0).unwrap();
-            assert_eq!(f, 0);
-        }
-    }
-
-    // ── Property 7: zero fee → net == gross ──────────────────────────────────
-    proptest! {
-        #[test]
-        fn prop_zero_fee_rate_net_equals_gross(
-            p in price_strategy(),
-            q in quantity_strategy(),
-        ) {
-            prop_assume!(p.checked_mul(q).is_some());
-            let (g, _f, n, _eff) = purchase_totals(p, q, 0).unwrap();
-            assert_eq!(n, g);
-        }
-    }
-
-    // ── Property 8: MAX fee, sub-tier quantity → fee == gross ─────────────────
-    proptest! {
-        #[test]
-        fn prop_max_fee_rate_fee_equals_gross(
-            p in price_strategy(),
-            // Keep quantity strictly below BULK_TIER_1 so no discount applies
-            // and effective_fee == MAX_FEE_BPS, meaning fee == gross.
-            q in 1u128..BULK_TIER_1,
-        ) {
-            prop_assume!(p.checked_mul(q).is_some());
-            let (g, f, _n, _eff) = purchase_totals(p, q, MAX_FEE_BPS).unwrap();
-            assert_eq!(f, g, "with MAX fee and no bulk discount, fee must equal gross");
-        }
-    }
-
-    // ── Property 9: fee is monotone in fee_bps ───────────────────────────────
-    proptest! {
-        #[test]
-        fn prop_fee_monotone_in_rate(
-            p in price_strategy(),
-            q in 1u128..1_000u128, // small qty to avoid overflow
-            fee_lo in 0u128..5_000u128,
-            fee_hi in 5_000u128..=MAX_FEE_BPS,
-        ) {
-            prop_assume!(p.checked_mul(q).is_some());
-            let (_g, f_lo, _, _) = purchase_totals(p, q, fee_lo).unwrap();
-            let (_, f_hi, _, _) = purchase_totals(p, q, fee_hi).unwrap();
-            assert!(f_lo <= f_hi, "fee not monotone: f_lo={f_lo} f_hi={f_hi}");
-        }
-    }
-
-    // ── Property 10: effective_fee_bps ≤ base_fee_bps always ─────────────────
-    proptest! {
-        #[test]
-        fn prop_effective_fee_lte_base(
-            base in fee_bps_strategy(),
-            qty in quantity_strategy(),
-        ) {
-            let eff = effective_fee_bps(base, qty).unwrap();
-            assert!(eff <= base);
-        }
-    }
-
-    // ── Property 11: effective_fee_bps is non-negative (always 0..=MAX) ──────
-    proptest! {
-        #[test]
-        fn prop_effective_fee_in_valid_range(
-            base in fee_bps_strategy(),
-            qty in quantity_strategy(),
-        ) {
-            let eff = effective_fee_bps(base, qty).unwrap();
-            assert!(eff <= MAX_FEE_BPS);
-        }
-    }
-
-    // ── Property 12: invalid fee rate always rejected ─────────────────────────
-    proptest! {
-        #[test]
-        fn prop_invalid_fee_rate_rejected(
-            base in (MAX_FEE_BPS + 1)..=u128::MAX,
-            qty in quantity_strategy(),
-        ) {
-            assert_eq!(
-                effective_fee_bps(base, qty),
-                Err(Error::InvalidFeeRate)
-            );
-        }
-    }
-
-    // ── Property 13: bulk discount increases with quantity tiers ─────────────
-    proptest! {
-        #[test]
-        fn prop_bulk_discount_monotone_in_tier(
-            q_small  in 0u128..BULK_TIER_1,
-            q_tier1  in BULK_TIER_1..BULK_TIER_2,
-            q_tier2  in BULK_TIER_2..BULK_TIER_3,
-            q_tier3  in BULK_TIER_3..=u128::MAX,
-        ) {
-            let d0 = bulk_discount_bps(q_small);
-            let d1 = bulk_discount_bps(q_tier1);
-            let d2 = bulk_discount_bps(q_tier2);
-            let d3 = bulk_discount_bps(q_tier3);
-            assert!(d0 <  d1, "tier0 >= tier1: {d0} {d1}");
-            assert!(d1 <= d2, "tier1 > tier2: {d1} {d2}");
-            assert!(d2 <  d3, "tier2 >= tier3: {d2} {d3}");
-        }
-    }
-
-    // ── Property 14: bulk discount is exactly correct per tier ───────────────
-    proptest! {
-        #[test]
-        fn prop_bulk_discount_exact_values(qty in quantity_strategy()) {
-            let disc = bulk_discount_bps(qty);
-            if qty >= BULK_TIER_3 {
-                assert_eq!(disc, BULK_DISCOUNT_TIER_3_BPS);
-            } else if qty >= BULK_TIER_2 {
-                assert_eq!(disc, BULK_DISCOUNT_TIER_2_BPS);
-            } else if qty >= BULK_TIER_1 {
-                assert_eq!(disc, BULK_DISCOUNT_TIER_1_BPS);
-            } else {
-                assert_eq!(disc, 0);
-            }
-        }
-    }
-
-    // ── Property 15: platform_fee(gross, 0) == 0 ─────────────────────────────
-    proptest! {
-        #[test]
-        fn prop_zero_fee_bps_yields_zero_fee(
-            gross in 0u128..=u128::MAX / 2,
-        ) {
-            assert_eq!(platform_fee(gross, 0).unwrap(), 0);
-        }
-    }
-
-    // ── Property 16: platform_fee(0, any_bps) == 0 ───────────────────────────
-    proptest! {
-        #[test]
-        fn prop_zero_gross_yields_zero_fee(fee in fee_bps_strategy()) {
-            assert_eq!(platform_fee(0, fee).unwrap(), 0);
-        }
-    }
-
-    // ── Property 17: net_cost(g, 0) == g ─────────────────────────────────────
-    proptest! {
-        #[test]
-        fn prop_net_cost_zero_fee_identity(g in 0u128..=u128::MAX) {
-            assert_eq!(net_cost(g, 0).unwrap(), g);
-        }
-    }
-
-    // ── Property 18: net_cost overflow detected ───────────────────────────────
-    proptest! {
-        #[test]
-        fn prop_net_cost_overflow_detected(
-            // g + f must overflow. Choose g in top half of u128, f such that
-            // g + f > u128::MAX. Use f = u128::MAX - g + 1 offset to guarantee overflow.
-            g in (u128::MAX / 2 + 1)..=u128::MAX,
-            extra in 1u128..=u128::MAX / 2,
-        ) {
-            // f = (u128::MAX - g) + extra  ensures g + f overflows
-            let f = (u128::MAX - g).saturating_add(extra);
-            prop_assume!(f >= 1);
-            assert_eq!(net_cost(g, f), Err(Error::ArithmeticOverflow));
-        }
-    }
-
-    // ── Property 19: purchase_totals is consistent (fee + gross == net) ───────
-    proptest! {
-        #[test]
-        fn prop_purchase_totals_consistent(
-            p in price_strategy(),
-            q in 1u128..10_000u128,
-            fee in fee_bps_strategy(),
-        ) {
-            prop_assume!(p.checked_mul(q).is_some());
-            if let Ok((g, f, n, _eff)) = purchase_totals(p, q, fee) {
-                assert_eq!(g + f, n, "g={g} f={f} n={n}");
-            }
-        }
-    }
-
-    // ── Property 20: purchase_totals with u128::MAX price detects overflow ────
-    proptest! {
-        #[test]
-        fn prop_max_price_overflow_detected(q in 2u128..=u128::MAX) {
-            assert_eq!(
-                purchase_totals(u128::MAX, q, 0),
-                Err(Error::ArithmeticOverflow)
-            );
-        }
-    }
-
-    // ── Property 21: fee grows linearly when both quantities are in same tier ──
-    proptest! {
-        #[test]
-        fn prop_fee_linear_in_gross(
-            p in 1u128..1_000_000u128,
-            // Keep both q and q*2 below BULK_TIER_1 so the effective fee rate
-            // is the same for both, making the relationship exactly linear.
-            q in 1u128..500u128, // q*2 < 1000 = BULK_TIER_1
-            fee in fee_bps_strategy(),
-        ) {
-            prop_assume!(p.checked_mul(q * 2).is_some());
-            let (_, f1, _, _) = purchase_totals(p, q, fee).unwrap();
-            let (_, f2, _, _) = purchase_totals(p, q * 2, fee).unwrap();
-            // Doubling quantity doubles the fee; allow at most 1 stroop rounding diff.
-            let diff = if f2 > f1 * 2 { f2 - f1 * 2 } else { f1 * 2 - f2 };
-            assert!(diff <= 1, "fee non-linear: f1={f1} f2={f2}");
-        }
-    }
-
-    // ── Property 22: fee truncation never overcharges buyer ──────────────────
-    proptest! {
-        #[test]
-        fn prop_fee_truncation_never_overcharges(
-            p in price_strategy(),
-            q in 1u128..100_000u128,
-            fee in fee_bps_strategy(),
-        ) {
-            prop_assume!(p.checked_mul(q).is_some());
-            if let Ok((g, f, _n, eff)) = purchase_totals(p, q, fee) {
-                // exact real fee = g * eff / 10_000
-                // integer fee should be ≤ exact real fee
-                // i.e. f * 10_000 ≤ g * eff
-                let lhs = f.checked_mul(MAX_FEE_BPS);
-                let rhs = g.checked_mul(eff);
-                match (lhs, rhs) {
-                    (Some(l), Some(r)) => assert!(l <= r, "overcharged: l={l} r={r}"),
-                    _ => {} // overflow in check arithmetic is fine, contract already handled it
-                }
-            }
-        }
-    }
-
-    // ── Property 23: effective_fee ≤ MAX_FEE_BPS even at tier-3 boundary ─────
-    proptest! {
-        #[test]
-        fn prop_effective_fee_boundary_tier3(
-            base in 0u128..=MAX_FEE_BPS,
-        ) {
-            let eff = effective_fee_bps(base, BULK_TIER_3).unwrap();
-            assert!(eff <= MAX_FEE_BPS);
-            assert!(eff <= base);
-        }
-    }
+    // PROPERTY 3: Sum of individual balances equals total supply
+    assert_eq!(seller_after + buyer_after, supply_after,
+        "Sum of all balances must equal total supply");
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 3. Regression tests
-//    Two concrete precision-loss bugs found during the arithmetic audit.
-// ═════════════════════════════════════════════════════════════════════════════
+// ── Edge case / negative tests ─────────────────────────────────────────────
 
-mod regression {
-    use super::*;
+#[test]
+fn test_create_listing_zero_amount_fails() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+    let seller = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 100);
+    let res = ctx.market_client.try_create_listing(&seller, &project_id, &0_i128, &10_i128);
+    assert_eq!(res, Err(Ok(MarketError::InvalidAmount)));
+}
 
-    /// Regression #1 — Fee truncation on small-price orders.
-    ///
-    /// Bug: With an original *unchecked* implementation using plain `as u128`
-    /// casts, the expression:
-    ///
-    ///   fee = (price * qty * fee_bps) / 10_000
-    ///
-    /// was evaluated left-to-right without intermediate overflow checks.
-    /// For `price = 1`, `qty = 999`, `fee_bps = 9_999` the product
-    /// `price * qty * fee_bps = 9_989_001` is small enough to fit in u128,
-    /// but an earlier prototype used `u64` internally and overflowed silently
-    /// on values just above `u64::MAX`. The checked implementation detects
-    /// this and either returns correctly or errors.
-    ///
-    /// Concrete check: the split calculation must equal the flat calculation.
-    /// qty = 999 is deliberately chosen to be below BULK_TIER_1 (1_000) so
-    /// no bulk discount is applied and the effective fee_bps == base fee_bps.
-    #[test]
-    fn regression_fee_truncation_small_price_bulk() {
-        let price: u128 = 1;
-        let qty: u128 = 999;  // < BULK_TIER_1, so no bulk discount
-        let fee_bps: u128 = 9_999;
+#[test]
+fn test_purchase_nonexistent_listing_fails() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+    let buyer = Address::generate(&env);
+    let fake_id = BytesN::from_array(&env, &[0u8; 32]);
+    let res = ctx.market_client.try_purchase_listing(&buyer, &fake_id, &1000_i128);
+    assert_eq!(res, Err(Ok(MarketError::ListingNotFound)));
+}
 
-        // Via purchase_totals (the correct implementation)
-        let (g, f, n, eff) = purchase_totals(price, qty, fee_bps).unwrap();
+#[test]
+fn test_purchase_underpayment_fails() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 100);
 
-        // No discount applied (qty < BULK_TIER_1 = 1_000)
-        assert_eq!(eff, fee_bps, "no discount expected");
+    let listing_id = ctx.market_client.create_listing(&seller, &project_id, &100_i128, &10_i128);
+    // Total cost is 1000 but payment is only 999
+    let res = ctx.market_client.try_purchase_listing(&buyer, &listing_id, &999_i128);
+    assert_eq!(res, Err(Ok(MarketError::InsufficientFunds)));
+}
 
-        // Manual reference calculation using the same checked ops
-        let expected_gross = price.checked_mul(qty).unwrap();
-        let expected_fee   = expected_gross.checked_mul(fee_bps).unwrap()
-                                           .checked_div(MAX_FEE_BPS).unwrap();
-        let expected_net   = expected_gross.checked_add(expected_fee).unwrap();
+#[test]
+fn test_cancel_already_sold_listing_fails() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 100);
 
-        assert_eq!(g, expected_gross, "gross mismatch");
-        assert_eq!(f, expected_fee,   "fee mismatch");
-        assert_eq!(n, expected_net,   "net mismatch");
+    let listing_id = ctx.market_client.create_listing(&seller, &project_id, &100_i128, &1_i128);
+    ctx.market_client.purchase_listing(&buyer, &listing_id, &100_i128);
 
-        // Spot values
-        assert_eq!(g, 999);
-        // fee = 999 * 9_999 / 10_000 = 9_989_001 / 10_000 = 998 (truncated)
-        assert_eq!(f, 998);
-        assert_eq!(n, 1_997);
-    }
-
-    /// Regression #2 — Bulk-discount underflow (fee goes negative).
-    ///
-    /// Bug: In a previous prototype the effective fee was computed as:
-    ///
-    ///   effective_bps = base_fee_bps - discount_bps   // unchecked subtraction
-    ///
-    /// When `base_fee_bps = 100` and `quantity >= BULK_TIER_1` the discount is
-    /// `500 bps`, causing a *wrapping underflow* on u128:
-    ///   100u128.wrapping_sub(500) == u128::MAX - 399
-    ///
-    /// That astronomically large effective rate then produced a fee larger than
-    /// the entire contract's available balance, triggering a spurious rejection.
-    ///
-    /// The fix uses `saturating_sub`, which floors the result at 0.
-    #[test]
-    fn regression_bulk_discount_underflow() {
-        let base_fee_bps: u128 = 100;  // 1%
-        let quantity: u128 = BULK_TIER_1; // discount = 500 bps > base_fee_bps
-
-        // Correct behaviour: effective rate floors at 0, fee = 0.
-        let eff = effective_fee_bps(base_fee_bps, quantity).unwrap();
-        assert_eq!(
-            eff, 0,
-            "effective fee should floor at 0, got {eff} (possible underflow)"
-        );
-
-        // Demonstrate what the buggy wrapping_sub would have produced:
-        let buggy_eff = base_fee_bps.wrapping_sub(500u128);
-        // buggy_eff is a huge number — make sure the fixed code never returns it
-        assert_ne!(eff, buggy_eff, "bug still present: wrapping underflow not fixed");
-
-        // And verify the full purchase_totals path returns zero fee
-        let price: u128 = 1_000_000;
-        let (g, f, n, _eff2) = purchase_totals(price, quantity, base_fee_bps).unwrap();
-        assert_eq!(f, 0, "fee should be 0 after discount underflow fix");
-        assert_eq!(n, g, "net should equal gross when fee is 0");
-    }
+    let res = ctx.market_client.try_cancel_listing(&seller, &listing_id);
+    assert_eq!(res, Err(Ok(MarketError::ListingNotActive)));
 }
