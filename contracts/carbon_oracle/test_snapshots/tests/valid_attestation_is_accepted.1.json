@@ -18,7 +18,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "573235dfde361819f3c4d69b0f467da86b1ef810efba4721990c12b6fa317abd"
+                  "bytes": "4de1a98bfc002818409649f8ee8b723f5f33281920c04a676aa087f64a80928d"
                 }
               ]
             }
@@ -55,7 +55,7 @@
                   "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "bytes": "5820f3bdec8eaf532d8ee16d2c057e65ca647bea823436dd9a8dd5a44407925823d8429cd3fc1bab210a18c4d6f9df7b9dd5f38bb520afe49f5ce3716a950e0a"
+                  "bytes": "4ba69a3779a920dc3c04c4579bbd53c5c2ba210ca6689fd018ef0023b602537db8d4050154aa1b2c811b0c227fe34b88f9205bfb7a363b341f656dd3caaa2409"
                 }
               ]
             }
@@ -203,7 +203,7 @@
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "573235dfde361819f3c4d69b0f467da86b1ef810efba4721990c12b6fa317abd"
+                                "bytes": "4de1a98bfc002818409649f8ee8b723f5f33281920c04a676aa087f64a80928d"
                               }
                             }
                           ]

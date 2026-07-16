@@ -18,7 +18,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "4305d5f47fc0b3d68430ecc36812bde16b194c4af8243dc1fa684de3fd6b0c8d"
+                  "bytes": "4abdcff25d0050cd6e296d77ac655d04084fbdcd4cba7f88241aec7ec9ba47b1"
                 }
               ]
             }
@@ -81,7 +81,7 @@
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "4305d5f47fc0b3d68430ecc36812bde16b194c4af8243dc1fa684de3fd6b0c8d"
+                                "bytes": "4abdcff25d0050cd6e296d77ac655d04084fbdcd4cba7f88241aec7ec9ba47b1"
                               }
                             }
                           ]
