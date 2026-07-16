@@ -36,3 +36,27 @@ jobs:
 
       - name: wasm build
         run: cargo build --release --target wasm32-unknown-unknown -p stellarkraal
+
+  fuzzing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+      - name: Fuzz mint
+        run: cargo +nightly fuzz run mint -- -max_total_time=60
+        working-directory: contracts/carbon_credit
+      - name: Fuzz burn
+        run: cargo +nightly fuzz run burn -- -max_total_time=60
+        working-directory: contracts/carbon_credit
+      - name: Fuzz retire
+        run: cargo +nightly fuzz run retire -- -max_total_time=60
+        working-directory: contracts/carbon_credit
+      - name: Fuzz transfer
+        run: cargo +nightly fuzz run transfer -- -max_total_time=60
+        working-directory: contracts/carbon_credit
+      - name: Fuzz batch
+        run: cargo +nightly fuzz run batch -- -max_total_time=60
+        working-directory: contracts/carbon_credit

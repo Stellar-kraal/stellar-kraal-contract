@@ -1,0 +1,49 @@
+[package]
+name = "carbon-credit-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1.3", features = ["derive"] }
+soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+carbon_registry = { path = "../../carbon_registry" }
+
+[dependencies.carbon_credit]
+path = ".."
+
+[patch.crates-io]
+
+[[bin]]
+name = "mint"
+path = "fuzz_targets/mint.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "burn"
+path = "fuzz_targets/burn.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "retire"
+path = "fuzz_targets/retire.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "transfer"
+path = "fuzz_targets/transfer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "batch"
+path = "fuzz_targets/batch.rs"
+test = false
+doc = false

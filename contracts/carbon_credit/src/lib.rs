@@ -45,6 +45,12 @@ fn supply_key(e: &Env, project_id: &BytesN<32>) -> Val {
     (symbol_short!("TSUP"), project_id.clone()).into_val(e)
 }
 
+/// Per-project retired supply key in persistent storage.
+/// Composite: ("RSUP", project_id)
+fn retired_supply_key(e: &Env, project_id: &BytesN<32>) -> Val {
+    (symbol_short!("RSUP"), project_id.clone()).into_val(e)
+}
+
 // ── Data types ────────────────────────────────────────────────────────────────
 
 /// Credit contract configuration stored in instance storage.
@@ -208,6 +214,10 @@ impl CarbonCredit {
             return Err(CreditError::InvalidAmount);
         }
 
+        if from == to {
+            return Ok(());
+        }
+
         let from_key = balance_key(&e, &from, &project_id);
         let from_bal: i128 = e.storage().persistent().get(&from_key).unwrap_or(0);
         if from_bal < amount {
@@ -258,6 +268,56 @@ impl CarbonCredit {
         Ok(())
     }
 
+    /// Retire `amount` credits from `from` for a project.
+    /// The credits are moved to a retired pool.
+    pub fn retire(
+        e: Env,
+        from: Address,
+        project_id: BytesN<32>,
+        amount: i128,
+    ) -> Result<(), CreditError> {
+        from.require_auth();
+        let _ = Self::load_config(&e)?;
+
+        if amount <= 0 {
+            return Err(CreditError::InvalidAmount);
+        }
+
+        let bkey = balance_key(&e, &from, &project_id);
+        let current: i128 = e.storage().persistent().get(&bkey).unwrap_or(0);
+        if current < amount {
+            return Err(CreditError::InsufficientBalance);
+        }
+        e.storage().persistent().set(&bkey, &(current - amount));
+
+        // Update total supply and retired supply
+        let skey = supply_key(&e, &project_id);
+        let current_supply: i128 = e.storage().persistent().get(&skey).unwrap_or(0);
+        let new_supply = current_supply.saturating_sub(amount);
+        e.storage().persistent().set(&skey, &new_supply);
+
+        let rkey = retired_supply_key(&e, &project_id);
+        let current_retired: i128 = e.storage().persistent().get(&rkey).unwrap_or(0);
+        let new_retired = current_retired.checked_add(amount).ok_or(CreditError::InvalidAmount)?;
+        e.storage().persistent().set(&rkey, &new_retired);
+
+        Ok(())
+    }
+
+    /// Batch transfer credits.
+    pub fn batch_transfer(
+        e: Env,
+        from: Address,
+        transfers: soroban_sdk::Vec<(Address, BytesN<32>, i128)>,
+    ) -> Result<(), CreditError> {
+        from.require_auth();
+        for i in 0..transfers.len() {
+            let transfer = transfers.get(i).unwrap();
+            Self::transfer(e.clone(), from.clone(), transfer.0, transfer.1, transfer.2)?;
+        }
+        Ok(())
+    }
+
     // ── Read-only queries ───────────────────────────────────────────────────
 
     /// Return the credit balance of `owner` for a specific project.
@@ -273,6 +333,14 @@ impl CarbonCredit {
         e.storage()
             .persistent()
             .get(&supply_key(&e, &project_id))
+            .unwrap_or(0)
+    }
+
+    /// Return the retired supply of credits for a project.
+    pub fn retired_supply(e: Env, project_id: BytesN<32>) -> i128 {
+        e.storage()
+            .persistent()
+            .get(&retired_supply_key(&e, &project_id))
             .unwrap_or(0)
     }
 
