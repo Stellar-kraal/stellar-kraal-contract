@@ -108,6 +108,14 @@ npm install
 npm run dev
 ```
 
+#### Backend tests
+
+```bash
+cd backend
+npm install
+npm test
+```
+
 #### Smart contract tests
 
 ```bash
@@ -228,6 +236,7 @@ npm run test:frontend
 | [Loan State Machine](docs/protocol/loan-state-machine.md) | All loan states, valid transitions, triggering events, and on-chain event mapping |
 | [Liquidation Mechanism](docs/protocol/liquidation.md) | Health factor formula, liquidation threshold, partial liquidation examples |
 | [Smart Contract Interface](docs/contracts/stellarkraal-interface.md) | Soroban contract public API, error codes, state changes, and CLI invocation guide |
+| [Idempotency Layer](docs/backend/idempotency.md) | Idempotency-Key protocol for critical financial endpoints, record schema, TTL, and partial-failure reconciliation |
 
 ## Architecture Decision Records
 
