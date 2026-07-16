@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "oracle-bridge"
+version = "0.1.0"
+description = "GEE to Soroban carbon oracle attestation pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography==42.0.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.2.2",
+    "pytest-cov==5.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["oracle_bridge*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--tb=short"

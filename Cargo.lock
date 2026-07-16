@@ -223,20 +223,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "carbon-marketplace"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "proptest-derive",
- "soroban-sdk",
-]
-
-[[package]]
 name = "carbon-oracle"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
- "rand 0.8.6",
+ "rand",
  "soroban-sdk",
 ]
 

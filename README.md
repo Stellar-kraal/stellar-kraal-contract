@@ -108,12 +108,45 @@ npm install
 npm run dev
 ```
 
+#### Backend tests
+
+```bash
+cd backend
+npm install
+npm test
+```
+
 #### Smart contract tests
 
 ```bash
 cd contracts/stellarkraal
 cargo test
 ```
+
+This runs both the unit tests (`src/tests.rs`) and the deterministic lifecycle simulation suite (`tests/lifecycle_simulation.rs`).
+
+#### Lifecycle simulation suite
+
+The simulation suite exercises the complete loan lifecycle end-to-end — initialization, oracle price feeds, collateral registration, loan issuance, repayment, and liquidation — as coordinated multi-party scenarios (admin, three oracle feeders, two farmers, and a third-party liquidator) using `soroban_sdk::testutils`. Each scenario pins the ledger sequence and timestamp and advances them explicitly, so runs are fully deterministic; the SDK's snapshots under `test_snapshots/` guard against unintended state drift.
+
+Scenario variants:
+
+| Scenario | Covers |
+|---|---|
+| `scenario_happy_path_full_lifecycle` | Full happy path with final-state assertions across every storage domain (config, oracle feed, assets, loans) |
+| `scenario_partial_repayment_then_full` | Balance settled in partial fills; closed loans reject further repayment |
+| `scenario_stale_oracle_feed_expires_and_recovers` | Feed expiry at `max_price_age_ledgers`, partial rounds, and recovery |
+| `scenario_rejected_requests_leave_state_untouched` | Over-LTV, double-collateralizing, phantom assets, rogue oracles, and premature liquidation all rejected without state changes |
+| `scenario_forced_liquidation_after_interest_accrual` | Health factor decays via interest until a liquidator force-closes the loan |
+
+To run only the simulation suite:
+
+```bash
+cd contracts/stellarkraal
+cargo test --test lifecycle_simulation
+```
+
+The full suite completes in well under a minute on standard CI hardware (scenario execution itself takes ~0.1 s after compilation).
 
 ## Staging Environment
 
@@ -203,6 +236,8 @@ npm run test:frontend
 | [Loan State Machine](docs/protocol/loan-state-machine.md) | All loan states, valid transitions, triggering events, and on-chain event mapping |
 | [Liquidation Mechanism](docs/protocol/liquidation.md) | Health factor formula, liquidation threshold, partial liquidation examples |
 | [Smart Contract Interface](docs/contracts/stellarkraal-interface.md) | Soroban contract public API, error codes, state changes, and CLI invocation guide |
+| [Idempotency Layer](docs/backend/idempotency.md) | Idempotency-Key protocol for critical financial endpoints, record schema, TTL, and partial-failure reconciliation |
+| [Rate Limiting](docs/backend/rate-limiting.md) | Multi-tier sliding-window rate limits for the public API, RFC 7807 responses, Redis failover, and load-test instructions |
 
 ## Architecture Decision Records
 
