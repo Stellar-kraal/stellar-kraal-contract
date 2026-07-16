@@ -31,6 +31,8 @@ jobs:
 
       - name: test
         run: cargo test --all
+        env:
+          PROPTEST_CASES: "10000"
 
       - name: wasm build
         run: cargo build --release --target wasm32-unknown-unknown -p stellarkraal
