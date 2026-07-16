@@ -25,7 +25,7 @@ use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
 
 use crate::{CarbonOracle, CarbonOracleClient, Error, SCHEMA_VERSION};
 
-// ── Test helpers ──────────────────────────────────────────────────────────────
+// ── Test helpers ─────────────────────────────────────────────────────────────
 
 /// Generate a fresh Ed25519 signing key.
 fn gen_key() -> SigningKey {
@@ -165,7 +165,7 @@ impl Fixture {
     }
 }
 
-// ── Happy-path tests ──────────────────────────────────────────────────────────
+// ── Happy-path tests ────────────────────────────────────────────────────────
 
 #[test]
 fn valid_attestation_is_accepted() {
@@ -226,7 +226,7 @@ fn assert_tampered_payload_rejected(idx: usize) {
     assert!(rejected, "tampered payload at byte {idx} was incorrectly accepted");
 }
 
-// ── Tamper tests ──────────────────────────────────────────────────────────────
+// ── Tamper tests ─────────────────────────────────────────────────────────────
 
 #[test]
 fn tampered_schema_version_rejected() {
