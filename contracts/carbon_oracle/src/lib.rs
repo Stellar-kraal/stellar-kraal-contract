@@ -21,8 +21,7 @@
 mod tests;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
-    Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol,
 };
 
 // ── Storage keys ─────────────────────────────────────────────────────────────
@@ -106,7 +105,7 @@ pub struct SourceValue {
     /// The price value from this source.
     pub value: i64,
     /// The weight assigned to this source in aggregation.
-    pub weight_numerator: i128,  // Stored as numerator for precision
+    pub weight_numerator: i128, // Stored as numerator for precision
     pub weight_denominator: i128,
 }
 
@@ -349,11 +348,7 @@ impl CarbonOracle {
     }
 
     /// Set the challenge window duration.
-    pub fn set_challenge_window(
-        e: Env,
-        admin: Address,
-        duration: u32,
-    ) -> Result<(), Error> {
+    pub fn set_challenge_window(e: Env, admin: Address, duration: u32) -> Result<(), Error> {
         let mut cfg = require_config(&e)?;
         admin.require_auth();
         if admin != cfg.admin {
@@ -377,7 +372,9 @@ impl CarbonOracle {
         // Prevent overwriting active commitments (wait for reveal or challenge window to pass)
         let key = commitment_key(&e, &feed_id);
         if let Some(existing) = e.storage().persistent().get::<_, PriceCommitment>(&key) {
-            if existing.state == CommitmentState::Committed || existing.state == CommitmentState::ChallengeWindow {
+            if existing.state == CommitmentState::Committed
+                || existing.state == CommitmentState::ChallengeWindow
+            {
                 return Err(Error::CommitmentActive);
             }
         }
@@ -403,7 +400,11 @@ impl CarbonOracle {
         challenger.require_auth();
 
         let key = commitment_key(&e, &feed_id);
-        let mut commitment = e.storage().persistent().get::<_, PriceCommitment>(&key).ok_or(Error::CommitmentNotFound)?;
+        let mut commitment = e
+            .storage()
+            .persistent()
+            .get::<_, PriceCommitment>(&key)
+            .ok_or(Error::CommitmentNotFound)?;
 
         if commitment.state != CommitmentState::ChallengeWindow {
             return Err(Error::InvalidCommitmentState);
@@ -437,7 +438,11 @@ impl CarbonOracle {
         oracle.require_auth();
 
         let key = commitment_key(&e, &feed_id);
-        let mut commitment = e.storage().persistent().get::<_, PriceCommitment>(&key).ok_or(Error::CommitmentNotFound)?;
+        let mut commitment = e
+            .storage()
+            .persistent()
+            .get::<_, PriceCommitment>(&key)
+            .ok_or(Error::CommitmentNotFound)?;
 
         if commitment.state != CommitmentState::ChallengeWindow {
             return Err(Error::InvalidCommitmentState);
@@ -458,7 +463,7 @@ impl CarbonOracle {
             &feed_id,
             &salt,
         );
-        let expected_hash = e.crypto().sha256(&payload);
+        let expected_hash: BytesN<32> = e.crypto().sha256(&payload).into();
         if expected_hash != commitment.commitment_hash {
             return Err(Error::InvalidReveal);
         }
@@ -496,11 +501,7 @@ impl CarbonOracle {
     }
 
     /// Rotate the oracle public key.  Only the admin may call this.
-    pub fn rotate_key(
-        e: Env,
-        admin: Address,
-        new_pubkey: BytesN<32>,
-    ) -> Result<(), Error> {
+    pub fn rotate_key(e: Env, admin: Address, new_pubkey: BytesN<32>) -> Result<(), Error> {
         let mut cfg = require_config(&e)?;
         admin.require_auth();
         if admin != cfg.admin {
@@ -583,7 +584,7 @@ impl CarbonOracle {
         }
 
         // num_sources as big-endian u32 (4 bytes)
-        let num_sources = source_values.len() as u32;
+        let num_sources = source_values.len();
         for b in num_sources.to_be_bytes() {
             msg.push_back(b);
         }

@@ -1,7 +1,7 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::{Address as _}, Address, BytesN, Env, symbol_short};
 use crate::*;
+use soroban_sdk::{symbol_short, testutils::Address as _, Address, BytesN, Env};
 
 fn make_env() -> Env {
     let env = Env::default();
@@ -10,17 +10,6 @@ fn make_env() -> Env {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-fn deploy_registry(env: &Env) -> (Address, Address, Address) {
-    use soroban_sdk::IntoVal;
-
-    let admin = Address::generate(env);
-    let marketplace = Address::generate(env);
-
-    // We register a mock registry — in unit tests we mock cross-contract calls,
-    // so we only need the address for config.
-    (Address::generate(env), admin, marketplace)
-}
 
 fn deploy_credit(env: &Env) -> (CarbonCreditClient<'_>, Address, Address, Address) {
     let registry = Address::generate(env);
@@ -40,7 +29,7 @@ fn fake_project_id(env: &Env) -> BytesN<32> {
 #[test]
 fn test_initialize_succeeds() {
     let env = make_env();
-    let (client, admin, registry, marketplace) = deploy_credit(&env);
+    let (client, _admin, _registry, _marketplace) = deploy_credit(&env);
     // verify config can be loaded (no panic)
     let _ = client.balance_of(&Address::generate(&env), &fake_project_id(&env));
 }
@@ -59,7 +48,6 @@ fn test_initialize_twice_fails() {
 /// We register a real registry contract so that the invoke_contract call succeeds.
 #[test]
 fn test_mint_increases_balance_and_supply() {
-    use soroban_sdk::{IntoVal, Symbol};
     use carbon_registry::{CarbonRegistry, CarbonRegistryClient};
 
     let env = make_env();
@@ -72,7 +60,8 @@ fn test_mint_increases_balance_and_supply() {
 
     // Register and verify a project
     let owner = Address::generate(&env);
-    let project_id = reg_client.register_project(&owner, &symbol_short!("TEST"), &1000_i128, &2024_u32);
+    let project_id =
+        reg_client.register_project(&owner, &symbol_short!("TEST"), &1000_i128, &2024_u32);
     reg_client.verify_project(&project_id);
 
     // Deploy credit contract pointing at real registry
@@ -121,7 +110,8 @@ fn test_vuln_cc01_toctou_mint_after_suspend_fails() {
     reg_client.initialize(&reg_admin, &marketplace_addr);
 
     let owner = Address::generate(&env);
-    let project_id = reg_client.register_project(&owner, &symbol_short!("TCTOU"), &1000_i128, &2024_u32);
+    let project_id =
+        reg_client.register_project(&owner, &symbol_short!("TCTOU"), &1000_i128, &2024_u32);
     reg_client.verify_project(&project_id);
 
     let credit_client = CarbonCreditClient::new(&env, &env.register(CarbonCredit, ()));
@@ -134,8 +124,11 @@ fn test_vuln_cc01_toctou_mint_after_suspend_fails() {
     // Now mint should fail because the registry reports Suspended
     let recipient = Address::generate(&env);
     let res = credit_client.try_mint(&recipient, &project_id, &100_i128);
-    assert_eq!(res, Err(Ok(CreditError::ProjectNotVerified)),
-        "Mint on a suspended project must fail");
+    assert_eq!(
+        res,
+        Err(Ok(CreditError::ProjectNotVerified)),
+        "Mint on a suspended project must fail"
+    );
 }
 
 // ── Transfer ───────────────────────────────────────────────────────────────
@@ -152,7 +145,8 @@ fn test_transfer_moves_balance() {
     reg_client.initialize(&reg_admin, &marketplace_addr);
 
     let owner = Address::generate(&env);
-    let project_id = reg_client.register_project(&owner, &symbol_short!("TRF"), &1000_i128, &2024_u32);
+    let project_id =
+        reg_client.register_project(&owner, &symbol_short!("TRF"), &1000_i128, &2024_u32);
     reg_client.verify_project(&project_id);
 
     let credit_client = CarbonCreditClient::new(&env, &env.register(CarbonCredit, ()));
@@ -180,7 +174,8 @@ fn test_transfer_insufficient_balance_fails() {
     reg_client.initialize(&reg_admin, &marketplace_addr);
 
     let owner = Address::generate(&env);
-    let project_id = reg_client.register_project(&owner, &symbol_short!("TRF2"), &1000_i128, &2024_u32);
+    let project_id =
+        reg_client.register_project(&owner, &symbol_short!("TRF2"), &1000_i128, &2024_u32);
     reg_client.verify_project(&project_id);
 
     let credit_client = CarbonCreditClient::new(&env, &env.register(CarbonCredit, ()));
@@ -208,7 +203,8 @@ fn test_burn_reduces_balance_and_supply() {
     reg_client.initialize(&reg_admin, &marketplace_addr);
 
     let owner = Address::generate(&env);
-    let project_id = reg_client.register_project(&owner, &symbol_short!("BURN"), &1000_i128, &2024_u32);
+    let project_id =
+        reg_client.register_project(&owner, &symbol_short!("BURN"), &1000_i128, &2024_u32);
     reg_client.verify_project(&project_id);
 
     let credit_client = CarbonCreditClient::new(&env, &env.register(CarbonCredit, ()));
@@ -234,7 +230,8 @@ fn test_burn_more_than_balance_fails() {
     reg_client.initialize(&reg_admin, &marketplace_addr);
 
     let owner = Address::generate(&env);
-    let project_id = reg_client.register_project(&owner, &symbol_short!("BURN2"), &1000_i128, &2024_u32);
+    let project_id =
+        reg_client.register_project(&owner, &symbol_short!("BURN2"), &1000_i128, &2024_u32);
     reg_client.verify_project(&project_id);
 
     let credit_client = CarbonCreditClient::new(&env, &env.register(CarbonCredit, ()));
@@ -261,7 +258,8 @@ fn test_prop_credits_conserved_across_transfer() {
     reg_client.initialize(&reg_admin, &marketplace_addr);
 
     let owner = Address::generate(&env);
-    let project_id = reg_client.register_project(&owner, &symbol_short!("CONS"), &10000_i128, &2024_u32);
+    let project_id =
+        reg_client.register_project(&owner, &symbol_short!("CONS"), &10000_i128, &2024_u32);
     reg_client.verify_project(&project_id);
 
     let credit_client = CarbonCreditClient::new(&env, &env.register(CarbonCredit, ()));
@@ -282,8 +280,11 @@ fn test_prop_credits_conserved_across_transfer() {
     let carol_before = credit_client.balance_of(&carol, &project_id);
 
     // Total pre-transfer individual balances must equal total supply
-    assert_eq!(alice_before + bob_before + carol_before, supply_before,
-        "Sum of balances must equal total supply before transfer");
+    assert_eq!(
+        alice_before + bob_before + carol_before,
+        supply_before,
+        "Sum of balances must equal total supply before transfer"
+    );
 
     // Perform transfers
     credit_client.transfer(&alice, &carol, &project_id, &200_i128);
@@ -295,12 +296,17 @@ fn test_prop_credits_conserved_across_transfer() {
     let carol_after = credit_client.balance_of(&carol, &project_id);
 
     // Total supply must be unchanged
-    assert_eq!(supply_before, supply_after,
-        "Total supply must not change across transfers");
+    assert_eq!(
+        supply_before, supply_after,
+        "Total supply must not change across transfers"
+    );
 
     // Sum of individual balances must still equal total supply
-    assert_eq!(alice_after + bob_after + carol_after, supply_after,
-        "Sum of balances must equal total supply after transfer");
+    assert_eq!(
+        alice_after + bob_after + carol_after,
+        supply_after,
+        "Sum of balances must equal total supply after transfer"
+    );
 }
 
 /// Property: balance_of never returns negative.
@@ -315,7 +321,8 @@ fn test_prop_balance_never_negative() {
     reg_client.initialize(&reg_admin, &marketplace_addr);
 
     let owner = Address::generate(&env);
-    let project_id = reg_client.register_project(&owner, &symbol_short!("NNEG"), &5000_i128, &2024_u32);
+    let project_id =
+        reg_client.register_project(&owner, &symbol_short!("NNEG"), &5000_i128, &2024_u32);
     reg_client.verify_project(&project_id);
 
     let credit_client = CarbonCreditClient::new(&env, &env.register(CarbonCredit, ()));
