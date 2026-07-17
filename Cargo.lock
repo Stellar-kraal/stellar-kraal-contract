@@ -33,6 +33,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "arithmetic"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "ark-bls12-381"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -220,6 +227,7 @@ dependencies = [
 name = "carbon-oracle"
 version = "0.1.0"
 dependencies = [
+ "arithmetic",
  "ed25519-dalek",
  "rand",
  "soroban-sdk",
@@ -253,6 +261,7 @@ dependencies = [
 name = "carbon_timelock"
 version = "0.1.0"
 dependencies = [
+ "arithmetic",
  "soroban-sdk",
 ]
 
@@ -1478,6 +1487,7 @@ dependencies = [
 name = "stellarkraal"
 version = "0.1.0"
 dependencies = [
+ "arithmetic",
  "soroban-sdk",
 ]
 

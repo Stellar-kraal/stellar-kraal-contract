@@ -411,6 +411,10 @@ impl CarbonOracle {
         }
 
         let current_ledger = e.ledger().sequence();
+        // INVARIANT: `recorded_at` (u32 ledger seq) + `challenge_window_duration` (u32)
+        // cannot overflow u32 — ledger sequences are bounded well below u32::MAX and the
+        // window is a small config value. Safe by construction.
+        #[allow(clippy::arithmetic_side_effects)]
         if current_ledger >= commitment.recorded_at + cfg.challenge_window_duration {
             return Err(Error::ChallengeWindowExpired);
         }
@@ -449,6 +453,9 @@ impl CarbonOracle {
         }
 
         let current_ledger = e.ledger().sequence();
+        // INVARIANT: `recorded_at` (u32) + `challenge_window_duration` (u32) cannot
+        // overflow u32 — bounded ledger sequence + small config window. Safe by construction.
+        #[allow(clippy::arithmetic_side_effects)]
         if current_ledger < commitment.recorded_at + cfg.challenge_window_duration {
             return Err(Error::ChallengeWindowNotExpired);
         }
@@ -611,6 +618,10 @@ impl CarbonOracle {
             metadata: AggregationMetadata {
                 method: method.clone(),
                 outlier_method: outlier_method.clone(),
+                // INVARIANT: `num_sources_rejected` <= `num_sources` by construction
+                // (we only ever increment the rejected count while iterating the sources),
+                // so this subtraction cannot underflow. Safe by invariant.
+                #[allow(clippy::arithmetic_side_effects)]
                 num_sources_used: num_sources - num_sources_rejected,
                 num_sources_rejected,
                 timestamp_utc,

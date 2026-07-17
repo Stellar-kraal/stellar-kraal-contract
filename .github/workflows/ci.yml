@@ -29,6 +29,15 @@ jobs:
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      # Issue #6 acceptance criterion: surface raw, overflow-prone integer
+      # arithmetic in the contract crates. `arithmetic_side_effects` warns on
+      # bare `+ - * / << >>` over integer types unless a `checked_*`/
+      # `saturating_*`/`wrapping_*` method is used, nudging contributors toward
+      # the audited `arithmetic` crate. Runs on library targets only (the test
+      # harness has pre-existing, out-of-scope compile errors on `main`).
+      - name: clippy (contract arithmetic safety)
+        run: cargo clippy --workspace --lib -- -W clippy::arithmetic_side_effects
+
       - name: test
         run: cargo test --all
         env:
