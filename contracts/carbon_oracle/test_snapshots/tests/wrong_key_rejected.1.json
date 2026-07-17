@@ -18,7 +18,10 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "98dc68cec24cd75d47c35d473673df1f91f5e60766d9da80b77c202a2e65bf5e"
+                  "bytes": "c040ab0b614c99d8e6f50f6e8679a4d125e49bfdc370b110307aa269aa19f681"
+                },
+                {
+                  "u32": 10
                 }
               ]
             }
@@ -78,10 +81,18 @@
                             },
                             {
                               "key": {
+                                "symbol": "challenge_window_duration"
+                              },
+                              "val": {
+                                "u32": 10
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "98dc68cec24cd75d47c35d473673df1f91f5e60766d9da80b77c202a2e65bf5e"
+                                "bytes": "c040ab0b614c99d8e6f50f6e8679a4d125e49bfdc370b110307aa269aa19f681"
                               }
                             }
                           ]

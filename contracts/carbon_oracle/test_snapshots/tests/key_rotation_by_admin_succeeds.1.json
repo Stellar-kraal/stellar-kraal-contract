@@ -18,7 +18,10 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "0490d7bb54416cea3a0383f307847f9e254bb20133ef9147030c8fb36e648a93"
+                  "bytes": "4eca6adc814f6006cb67d3cc726fd13f3df711ebebd5e88b343e62783e4b8d95"
+                },
+                {
+                  "u32": 10
                 }
               ]
             }
@@ -40,7 +43,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "27d6264c50b96c8f17856e023e840ee85409d2ca2f87465e7d30df83f2bf8aa0"
+                  "bytes": "6a50e47cda9d9acde2775fda6a5d20fd98cb181d9e544a9b44640c355a0d2450"
                 }
               ]
             }
@@ -77,8 +80,9 @@
                   "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "bytes": "d36bb32134d12157f063c8d197a1061ae3e8843b559ea9e9ea2e7661fe67b4d621e303601d31b0f855e8dc5f113cc091a361ab44d80d41c217e1af1c71fc4b06"
-                }
+                  "bytes": "e77fa4e51bc084df62dbeb37e0a86e1c659cfffae6bbbec8d8087648d6d54f404c910c4b32d824d346c89d57150dcf6f0b7a5925bf3565a5d8202f9169c06105"
+                },
+                "void"
               ]
             }
           },
@@ -140,6 +144,14 @@
                       },
                       "val": {
                         "bytes": "beef000000000000000000000000000000000000000000000000000000000000"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "ipfs_cid"
+                      },
+                      "val": {
+                        "bytes": ""
                       }
                     },
                     {
@@ -222,10 +234,18 @@
                             },
                             {
                               "key": {
+                                "symbol": "challenge_window_duration"
+                              },
+                              "val": {
+                                "u32": 10
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "27d6264c50b96c8f17856e023e840ee85409d2ca2f87465e7d30df83f2bf8aa0"
+                                "bytes": "6a50e47cda9d9acde2775fda6a5d20fd98cb181d9e544a9b44640c355a0d2450"
                               }
                             }
                           ]

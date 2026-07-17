@@ -8,6 +8,10 @@
 //! `docs/oracle/attestation-schema.md`.  Updates that fail signature
 //! verification are rejected with [`Error::InvalidAttestation`].
 //!
+//! Each price entry now stores the IPFS CID of its provenance record
+//! (see `docs/oracle/provenance-schema.md`), enabling full reproducibility
+//! audit trails for GEE script submissions.
+//!
 //! # Attestation payload layout (113 bytes, big-endian integers)
 //! ```text
 //! [1]  schema_version    u8
@@ -21,8 +25,8 @@
 mod tests;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
-    Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN,
+    Env, Symbol,
 };
 
 // ── Storage keys ─────────────────────────────────────────────────────────────
@@ -44,6 +48,9 @@ pub const PAYLOAD_LEN: usize = 113;
 
 /// Schema version this contract accepts.
 pub const SCHEMA_VERSION: u8 = 1;
+
+/// Maximum length of an IPFS CID string in bytes (CIDv1 Base32 is typically ≤59 bytes).
+pub const MAX_CID_LEN: u32 = 64;
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -82,6 +89,10 @@ pub struct PriceCommitment {
 }
 
 /// A stored price entry for a given feed.
+///
+/// Now includes `ipfs_cid` — the IPFS CID of the off-chain provenance record
+/// that captures the exact GEE script version, input parameters, and
+/// computation metadata used to produce this entry.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PriceEntry {
@@ -95,6 +106,11 @@ pub struct PriceEntry {
     pub input_params_hash: BytesN<32>,
     /// Ledger sequence number when this entry was recorded.
     pub recorded_at: u32,
+    /// IPFS CID of the off-chain provenance record (up to 64 bytes).
+    ///
+    /// An empty `Bytes` means no CID was provided (backwards compatible with
+    /// pre-CID submissions).
+    pub ipfs_cid: Bytes,
 }
 
 /// Per-source price value for multi-source aggregations.
@@ -138,6 +154,8 @@ pub struct AggregatedPriceEntry {
     pub metadata: AggregationMetadata,
     /// Ledger sequence when recorded.
     pub recorded_at: u32,
+    /// IPFS CID of the off-chain provenance record.
+    pub ipfs_cid: Bytes,
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -170,6 +188,8 @@ pub enum Error {
     InvalidReveal = 11,
     /// The commitment is in an invalid state for this operation.
     InvalidCommitmentState = 12,
+    /// The IPFS CID exceeds the maximum allowed length.
+    CidTooLong = 13,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -256,6 +276,22 @@ fn build_commitment_payload(
     msg
 }
 
+/// Convert an optional CID string (as raw bytes) to a ``Bytes`` value.
+/// Returns an empty ``Bytes`` if ``None`` is passed.
+/// Returns ``Error::CidTooLong`` if the CID exceeds ``MAX_CID_LEN``.
+fn cid_to_bytes(e: &Env, cid: Option<Bytes>) -> Result<Bytes, Error> {
+    match cid {
+        None => Ok(Bytes::new(e)),
+        Some(b) => {
+            if b.len() > MAX_CID_LEN {
+                Err(Error::CidTooLong)
+            } else {
+                Ok(b)
+            }
+        }
+    }
+}
+
 // ── Contract ──────────────────────────────────────────────────────────────────
 
 #[contract]
@@ -300,6 +336,7 @@ impl CarbonOracle {
     /// - `timestamp_utc`: Unix timestamp of the GEE computation.
     /// - `feed_id`: 32-byte feed identifier.
     /// - `signature`: 64-byte Ed25519 signature over the 113-byte canonical payload.
+    /// - `ipfs_cid`: optional IPFS CID bytes of the off-chain provenance record.
     ///
     /// The contract re-derives the canonical 113-byte payload, verifies the
     /// Ed25519 signature against the stored oracle public key, and rejects the
@@ -314,6 +351,7 @@ impl CarbonOracle {
         timestamp_utc: i64,
         feed_id: BytesN<32>,
         signature: BytesN<64>,
+        ipfs_cid: Option<Bytes>,
     ) -> Result<(), Error> {
         let cfg = require_config(&e)?;
         oracle.require_auth();
@@ -333,13 +371,17 @@ impl CarbonOracle {
         e.crypto()
             .ed25519_verify(&cfg.oracle_pubkey, &payload, &signature);
 
-        // ── 3. Store the price entry ──────────────────────────────────────────
+        // ── 3. Validate and encode CID ────────────────────────────────────────
+        let cid_bytes = cid_to_bytes(&e, ipfs_cid)?;
+
+        // ── 4. Store the price entry ──────────────────────────────────────────
         let entry = PriceEntry {
             output_value,
             timestamp_utc,
             script_hash,
             input_params_hash,
             recorded_at: e.ledger().sequence(),
+            ipfs_cid: cid_bytes,
         };
         e.storage()
             .persistent()
@@ -421,6 +463,9 @@ impl CarbonOracle {
     }
 
     /// Reveal a price entry after the challenge window expires.
+    ///
+    /// Now accepts an optional `ipfs_cid` that is stored alongside the price
+    /// entry for provenance audit trail.
     #[allow(clippy::too_many_arguments)]
     pub fn reveal_price(
         e: Env,
@@ -432,6 +477,7 @@ impl CarbonOracle {
         timestamp_utc: i64,
         salt: BytesN<32>,
         signature: BytesN<64>,
+        ipfs_cid: Option<Bytes>,
     ) -> Result<(), Error> {
         let cfg = require_config(&e)?;
         oracle.require_auth();
@@ -458,7 +504,7 @@ impl CarbonOracle {
             &feed_id,
             &salt,
         );
-        let expected_hash = e.crypto().sha256(&payload);
+        let expected_hash: BytesN<32> = e.crypto().sha256(&payload).into();
         if expected_hash != commitment.commitment_hash {
             return Err(Error::InvalidReveal);
         }
@@ -480,13 +526,17 @@ impl CarbonOracle {
         commitment.state = CommitmentState::Revealed;
         e.storage().persistent().set(&key, &commitment);
 
-        // Store the final price entry
+        // Validate and encode CID
+        let cid_bytes = cid_to_bytes(&e, ipfs_cid)?;
+
+        // Store the final price entry with IPFS CID
         let entry = PriceEntry {
             output_value,
             timestamp_utc,
             script_hash,
             input_params_hash,
             recorded_at: current_ledger,
+            ipfs_cid: cid_bytes,
         };
         e.storage()
             .persistent()
@@ -512,6 +562,10 @@ impl CarbonOracle {
     }
 
     /// Read the latest price entry for a given feed.
+    ///
+    /// The returned [`PriceEntry`] now includes `ipfs_cid` — use it to fetch
+    /// the full provenance record from IPFS for audit and reproducibility
+    /// verification.
     pub fn get_price(e: Env, feed_id: BytesN<32>) -> Result<PriceEntry, Error> {
         require_config(&e)?;
         e.storage()
@@ -529,22 +583,10 @@ impl CarbonOracle {
             .ok_or(Error::CommitmentNotFound)
     }
 
-    /// Submit an aggregated price entry with per-source values and metadata.
+    /// Submit an aggregated price entry with per-source values, metadata,
+    /// and an optional IPFS CID for the provenance record.
     ///
     /// Used for multi-source aggregations with provenance tracking.
-    /// Parameters:
-    /// - `oracle`: the oracle operator address.
-    /// - `feed_id`: 32-byte feed identifier.
-    /// - `aggregate_value`: computed weighted median (i64).
-    /// - `source_values`: list of per-source values with IDs and weights.
-    /// - `method`: aggregation method name (e.g., "weighted_median").
-    /// - `outlier_method`: outlier rejection method (e.g., "iqr", "mad", "none").
-    /// - `num_sources_rejected`: count of sources rejected as outliers.
-    /// - `timestamp_utc`: Unix timestamp of aggregation.
-    /// - `signature`: Ed25519 signature over the aggregation payload.
-    ///
-    /// The contract verifies the signature and stores the aggregated entry
-    /// in a separate storage key for audit and retrieval.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_aggregated_price(
         e: Env,
@@ -557,15 +599,14 @@ impl CarbonOracle {
         num_sources_rejected: u32,
         timestamp_utc: i64,
         signature: BytesN<64>,
+        ipfs_cid: Option<Bytes>,
     ) -> Result<(), Error> {
         let cfg = require_config(&e)?;
         oracle.require_auth();
 
         // Verify signature over aggregation parameters
-        // Create a deterministic payload from aggregation inputs
         let mut msg = soroban_sdk::Bytes::new(&e);
 
-        // Include all relevant fields in signature verification
         // Schema version marker for aggregated entries
         msg.push_back(2u8);
 
@@ -603,6 +644,9 @@ impl CarbonOracle {
             });
         }
 
+        // Validate and encode CID
+        let cid_bytes = cid_to_bytes(&e, ipfs_cid)?;
+
         // Build aggregated entry
         let entry = AggregatedPriceEntry {
             aggregate_value,
@@ -615,6 +659,7 @@ impl CarbonOracle {
                 timestamp_utc,
             },
             recorded_at: e.ledger().sequence(),
+            ipfs_cid: cid_bytes,
         };
 
         e.storage()
@@ -626,7 +671,8 @@ impl CarbonOracle {
 
     /// Read the latest aggregated price entry for a given feed.
     ///
-    /// Returns the aggregated value, per-source values, and provenance metadata.
+    /// The returned [`AggregatedPriceEntry`] includes `ipfs_cid` for provenance
+    /// retrieval.
     pub fn get_aggregated_price(
         e: Env,
         feed_id: BytesN<32>,
