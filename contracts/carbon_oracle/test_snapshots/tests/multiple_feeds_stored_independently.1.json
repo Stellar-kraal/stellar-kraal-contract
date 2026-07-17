@@ -18,7 +18,10 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "d321f42952ca0dde88073eb415ef4deb05b6c6770ab04cd1e1cc5bf1cebb1d5a"
+                  "bytes": "405ab2c371c644789b5add5147c8878398ae1d3807fa281c5a40d4cd8bbae319"
+                },
+                {
+                  "u32": 10
                 }
               ]
             }
@@ -55,7 +58,7 @@
                   "bytes": "aa00000000000000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "bytes": "d2823346b30b03f9abed2798df3e13073a1d3b9123f85de68ea9c55580026b66112cbde73345c9872fa0dc638cb758190a96d9af8c83d0b670f0e16688492008"
+                  "bytes": "0c03155ac46c0425874b4e2fa3d43547ed34396e4647f0c8f70d6a414d7ee4086d8bde0b8b42fbb6fc30f5e68835ab07ddfe593c9d4a9de0c6efb2480b4be40b"
                 }
               ]
             }
@@ -92,7 +95,7 @@
                   "bytes": "bb00000000000000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "bytes": "6522ae9f738a7b9ce9d6cdd4df1b5303c8dadd6d9d3244289bb9fdb3d87f8f981ead234167a0db8739cee3fa8082c8610d643ecd1629937af416790be6f6ab00"
+                  "bytes": "59697a154bcee5941c28fc633b7225601175d3c10ecd8f39e364d315806cd227e0015f479e9ed922304e00d310595f3ffb163c5715b6ae1507db5c28472dde02"
                 }
               ]
             }
@@ -325,10 +328,18 @@
                             },
                             {
                               "key": {
+                                "symbol": "challenge_window_duration"
+                              },
+                              "val": {
+                                "u32": 10
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "d321f42952ca0dde88073eb415ef4deb05b6c6770ab04cd1e1cc5bf1cebb1d5a"
+                                "bytes": "405ab2c371c644789b5add5147c8878398ae1d3807fa281c5a40d4cd8bbae319"
                               }
                             }
                           ]

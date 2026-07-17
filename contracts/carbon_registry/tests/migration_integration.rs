@@ -5,7 +5,6 @@
 /// - Rollback capability
 /// - Schema validation
 /// - Audit trails via MigrationState
-
 #[cfg(test)]
 mod migration_integration_tests {
     /// Test framework design for full v1 → v2 migration workflow.

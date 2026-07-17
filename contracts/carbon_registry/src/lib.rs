@@ -12,8 +12,8 @@
 #![allow(clippy::too_many_arguments)]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN,
-    Env, IntoVal, Symbol, Val,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env,
+    IntoVal, Symbol, Val,
 };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -98,11 +98,7 @@ impl CarbonRegistry {
     // ── Initialization ──────────────────────────────────────────────────────
 
     /// One-time initialization. Stores admin and marketplace addresses.
-    pub fn initialize(
-        e: Env,
-        admin: Address,
-        marketplace: Address,
-    ) -> Result<(), RegistryError> {
+    pub fn initialize(e: Env, admin: Address, marketplace: Address) -> Result<(), RegistryError> {
         if e.storage().instance().has(&CONFIG) {
             return Err(RegistryError::AlreadyInitialized);
         }
@@ -134,13 +130,14 @@ impl CarbonRegistry {
         // Derive a deterministic ID from owner + name + vintage
         // We encode the key as XDR via to_xdr which returns Bytes directly
         let id_input: soroban_sdk::Val = (owner.clone(), name.clone(), vintage_year).into_val(&e);
-        let id_bytes: Bytes = <Bytes as soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>::try_from_val(&e, &id_input)
-            .unwrap_or_else(|_| {
-                // Fallback: encode each component separately
-                let mut b = Bytes::new(&e);
-                b.extend_from_array(&vintage_year.to_be_bytes());
-                b
-            });
+        let id_bytes: Bytes =
+            <Bytes as soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>::try_from_val(&e, &id_input)
+                .unwrap_or_else(|_| {
+                    // Fallback: encode each component separately
+                    let mut b = Bytes::new(&e);
+                    b.extend_from_array(&vintage_year.to_be_bytes());
+                    b
+                });
         let id: BytesN<32> = e.crypto().sha256(&id_bytes).into();
 
         let project = CarbonProject {
@@ -218,11 +215,7 @@ impl CarbonRegistry {
     ///
     /// Callable by marketplace OR admin. Increments `issued_credits`.
     /// Fails if project is not Verified or if the new total would exceed `total_credits`.
-    pub fn issue_credits(
-        e: Env,
-        id: BytesN<32>,
-        amount: i128,
-    ) -> Result<(), RegistryError> {
+    pub fn issue_credits(e: Env, id: BytesN<32>, amount: i128) -> Result<(), RegistryError> {
         let cfg = Self::load_config(&e)?;
 
         // Either the marketplace or the admin must authorize this call.

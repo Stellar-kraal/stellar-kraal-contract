@@ -129,7 +129,11 @@ impl CarbonCredit {
         if e.storage().instance().has(&CONFIG) {
             return Err(CreditError::AlreadyInitialized);
         }
-        let cfg = CreditConfig { admin, registry, marketplace };
+        let cfg = CreditConfig {
+            admin,
+            registry,
+            marketplace,
+        };
         e.storage().instance().set(&CONFIG, &cfg);
         Ok(())
     }
@@ -183,7 +187,9 @@ impl CarbonCredit {
         // STEP 3: Write new balance (operates on stale verification result).
         let bkey = balance_key(&e, &to, &project_id);
         let current: i128 = e.storage().persistent().get(&bkey).unwrap_or(0);
-        let new_balance = current.checked_add(amount).ok_or(CreditError::InvalidAmount)?;
+        let new_balance = current
+            .checked_add(amount)
+            .ok_or(CreditError::InvalidAmount)?;
         e.storage().persistent().set(&bkey, &new_balance);
 
         // Update total supply
@@ -233,9 +239,12 @@ impl CarbonCredit {
         e.storage()
             .persistent()
             .set(&from_key, &(from_bal - amount));
-        e.storage()
-            .persistent()
-            .set(&to_key, &(to_bal.checked_add(amount).ok_or(CreditError::InvalidAmount)?));
+        e.storage().persistent().set(
+            &to_key,
+            &(to_bal
+                .checked_add(amount)
+                .ok_or(CreditError::InvalidAmount)?),
+        );
 
         Ok(())
     }
@@ -307,7 +316,9 @@ impl CarbonCredit {
 
         let rkey = retired_supply_key(&e, &project_id);
         let current_retired: i128 = e.storage().persistent().get(&rkey).unwrap_or(0);
-        let new_retired = current_retired.checked_add(amount).ok_or(CreditError::InvalidAmount)?;
+        let new_retired = current_retired
+            .checked_add(amount)
+            .ok_or(CreditError::InvalidAmount)?;
         e.storage().persistent().set(&rkey, &new_retired);
 
         Ok(())
