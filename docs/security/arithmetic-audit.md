@@ -62,15 +62,33 @@ future edit reintroduces a bare overflow-prone operator.
 - Prices and fractional credits are stored as scaled integers. Scaling factors
   were previously **magic literals** spread across crates. These are now
   centralized as named constants (`SCALE = 1_000_000`, `MIN_PRICE_TICK`,
-  `MAX_CREDIT_QUANTITY`) in the new `arithmetic` crate.
+  `MAX_CREDIT_QUANTITY`) in the new `arithmetic`/`math.rs` crate.
 - Per-source aggregation uses `weight_numerator / weight_denominator`; the
   helper `weighted_avg` performs the multiply in `i128` before dividing, so an
   in-range weight can never overflow the narrower storage field.
 
-### 2.2 Bounds
+### 2.2 Bounds & guarded subtractions
 - Credit quantities are bounded by a `u32` field; `MAX_CREDIT_QUANTITY` encodes
   that bound so `to_fixed` rejects values above it rather than silently
   truncating.
+- The remaining raw integer operations (ledger-sequence window math in
+  `carbon_oracle`, `num_sources` cast, `num_sources - num_sources_rejected`,
+  and three balance subtractions in `carbon_credit`) are each **provably safe by
+  invariant** — every one is preceded by an explicit bounds check or is bounded
+  by construction. Each carries an `INVARIANT` comment and an
+  `#[allow(clippy::arithmetic_side_effects)]` so the intent is auditable and the
+  new CI gate stays green.
+
+### 2.3 Contract coverage
+- All **five** contract crates (`carbon_credit`, `carbon_marketplace`,
+  `carbon_registry`, `carbon_oracle`, `stellarkraal`) now depend on the shared
+  `arithmetic` crate and report **0** `clippy::arithmetic_side_effects` warnings
+  on their library targets.
+- NOTE: `carbon_credit` and `carbon_marketplace` intentionally contain
+  deliberate security vulnerabilities (TOCTOU, reentrancy, auth-after-effect —
+  see their module docs `VULN-CC-01`, `VULN-MP-01..03`). Those are **out of
+  scope** for this arithmetic audit and were deliberately left untouched; only
+  their numeric arithmetic was reviewed and annotated.
 
 ---
 

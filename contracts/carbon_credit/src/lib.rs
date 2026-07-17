@@ -227,6 +227,9 @@ impl CarbonCredit {
         let to_key = balance_key(&e, &to, &project_id);
         let to_bal: i128 = e.storage().persistent().get(&to_key).unwrap_or(0);
 
+        // INVARIANT: `from_bal >= amount` checked at line 223, so this subtraction
+        // cannot underflow. Safe by prior bounds check.
+        #[allow(clippy::arithmetic_side_effects)]
         e.storage()
             .persistent()
             .set(&from_key, &(from_bal - amount));
@@ -257,6 +260,9 @@ impl CarbonCredit {
         if current < amount {
             return Err(CreditError::InsufficientBalance);
         }
+        // INVARIANT: `current >= amount` checked at line 257, so this subtraction
+        // cannot underflow. Safe by prior bounds check.
+        #[allow(clippy::arithmetic_side_effects)]
         e.storage().persistent().set(&bkey, &(current - amount));
 
         // Reduce total supply
@@ -288,6 +294,9 @@ impl CarbonCredit {
         if current < amount {
             return Err(CreditError::InsufficientBalance);
         }
+        // INVARIANT: `current >= amount` checked at line 288, so this subtraction
+        // cannot underflow. Safe by prior bounds check.
+        #[allow(clippy::arithmetic_side_effects)]
         e.storage().persistent().set(&bkey, &(current - amount));
 
         // Update total supply and retired supply
