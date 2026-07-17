@@ -459,7 +459,7 @@ impl CarbonOracle {
             &salt,
         );
         let expected_hash = e.crypto().sha256(&payload);
-        if expected_hash != commitment.commitment_hash {
+        if expected_hash.to_bytes() != commitment.commitment_hash {
             return Err(Error::InvalidReveal);
         }
 

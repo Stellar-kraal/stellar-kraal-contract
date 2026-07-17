@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["contracts/stellarkraal", "contracts/carbon_oracle", "contracts/carbon_registry"]
+members = [
+    "contracts/arithmetic",
+    "contracts/stellarkraal",
+    "contracts/carbon_oracle",
+    "contracts/carbon_registry",
+]
 
 [profile.release]
 opt-level = "z"
