@@ -21,7 +21,10 @@ extern crate std;
 
 use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    Address, BytesN, Env,
+};
 
 use crate::{CarbonOracle, CarbonOracleClient, CommitmentState, Error, SCHEMA_VERSION};
 
@@ -209,8 +212,13 @@ fn assert_tampered_payload_rejected(idx: usize) {
     let output_value: i64 = 1_234_567;
     let timestamp_utc: i64 = 1_720_051_200;
 
-    let mut payload =
-        build_payload_bytes(&f.script_hash, &f.input_params_hash, output_value, timestamp_utc, &f.feed_id);
+    let mut payload = build_payload_bytes(
+        &f.script_hash,
+        &f.input_params_hash,
+        output_value,
+        timestamp_utc,
+        &f.feed_id,
+    );
 
     let sig = sign_payload(&f.signing_key, &payload); // sign BEFORE tamper
 
@@ -223,7 +231,10 @@ fn assert_tampered_payload_rejected(idx: usize) {
     let fid: [u8; 32] = payload[81..113].try_into().unwrap();
 
     let rejected = f.try_submit_with_sig(ov, ts, sh, iph, fid, sig);
-    assert!(rejected, "tampered payload at byte {idx} was incorrectly accepted");
+    assert!(
+        rejected,
+        "tampered payload at byte {idx} was incorrectly accepted"
+    );
 }
 
 // ── Tamper tests ──────────────────────────────────────────────────────────────
@@ -244,8 +255,7 @@ fn tampered_schema_version_rejected() {
     let ts: i64 = 1_720_051_200;
 
     // Build payload with a WRONG schema_version byte (e.g., 0xFF).
-    let mut payload =
-        build_payload_bytes(&f.script_hash, &f.input_params_hash, ov, ts, &f.feed_id);
+    let mut payload = build_payload_bytes(&f.script_hash, &f.input_params_hash, ov, ts, &f.feed_id);
     payload[0] = 0xFF; // wrong schema version
 
     // Sign the tampered (wrong-version) payload.
@@ -253,7 +263,8 @@ fn tampered_schema_version_rejected() {
 
     // The contract will rebuild the message with SCHEMA_VERSION=1 and verify
     // against that — so the signature over the 0xFF version must be rejected.
-    let rejected = f.try_submit_with_sig(ov, ts, f.script_hash, f.input_params_hash, f.feed_id, sig);
+    let rejected =
+        f.try_submit_with_sig(ov, ts, f.script_hash, f.input_params_hash, f.feed_id, sig);
     assert!(
         rejected,
         "signature over wrong schema_version should be rejected"
@@ -294,7 +305,8 @@ fn tampered_signature_rejected() {
     let mut sig = sign_payload(&f.signing_key, &payload);
     sig[0] ^= 0xFF;
 
-    let rejected = f.try_submit_with_sig(ov, ts, f.script_hash, f.input_params_hash, f.feed_id, sig);
+    let rejected =
+        f.try_submit_with_sig(ov, ts, f.script_hash, f.input_params_hash, f.feed_id, sig);
     assert!(rejected, "tampered signature was incorrectly accepted");
 }
 
@@ -307,7 +319,8 @@ fn wrong_key_rejected() {
     let payload = build_payload_bytes(&f.script_hash, &f.input_params_hash, ov, ts, &f.feed_id);
     let sig = sign_payload(&wrong_key, &payload);
 
-    let rejected = f.try_submit_with_sig(ov, ts, f.script_hash, f.input_params_hash, f.feed_id, sig);
+    let rejected =
+        f.try_submit_with_sig(ov, ts, f.script_hash, f.input_params_hash, f.feed_id, sig);
     assert!(rejected, "wrong-key attestation was incorrectly accepted");
 }
 
@@ -357,7 +370,8 @@ fn key_rotation_by_admin_succeeds() {
     let f = Fixture::new();
     let new_key = gen_key();
     let new_pubkey_bytes = new_key.verifying_key().to_bytes();
-    f.client.rotate_key(&f.admin, &n32(&f.env, &new_pubkey_bytes));
+    f.client
+        .rotate_key(&f.admin, &n32(&f.env, &new_pubkey_bytes));
 
     // New key must now be accepted.
     f.submit_ok(42, 1_720_000_000, None, None, None, Some(&new_key));
@@ -368,7 +382,8 @@ fn old_key_rejected_after_rotation() {
     let f = Fixture::new();
     let new_key = gen_key();
     let new_pubkey_bytes = new_key.verifying_key().to_bytes();
-    f.client.rotate_key(&f.admin, &n32(&f.env, &new_pubkey_bytes));
+    f.client
+        .rotate_key(&f.admin, &n32(&f.env, &new_pubkey_bytes));
 
     // Original (old) key must now fail.
     let ov: i64 = 42;
@@ -376,7 +391,8 @@ fn old_key_rejected_after_rotation() {
     let payload = build_payload_bytes(&f.script_hash, &f.input_params_hash, ov, ts, &f.feed_id);
     let sig = sign_payload(&f.signing_key, &payload); // old key
 
-    let rejected = f.try_submit_with_sig(ov, ts, f.script_hash, f.input_params_hash, f.feed_id, sig);
+    let rejected =
+        f.try_submit_with_sig(ov, ts, f.script_hash, f.input_params_hash, f.feed_id, sig);
     assert!(rejected, "old key should be rejected after rotation");
 }
 
@@ -433,22 +449,33 @@ fn commit_and_reveal_success() {
     let mut payload = soroban_sdk::Bytes::new(&f.env);
     payload.append(&n32(&f.env, &f.script_hash).into());
     payload.append(&n32(&f.env, &f.input_params_hash).into());
-    for b in output_value.to_be_bytes() { payload.push_back(b); }
-    for b in timestamp_utc.to_be_bytes() { payload.push_back(b); }
+    for b in output_value.to_be_bytes() {
+        payload.push_back(b);
+    }
+    for b in timestamp_utc.to_be_bytes() {
+        payload.push_back(b);
+    }
     payload.append(&n32(&f.env, &f.feed_id).into());
     payload.append(&n32(&f.env, &salt).into());
-    let commitment_hash = f.env.crypto().sha256(&payload);
+    let commitment_hash: BytesN<32> = f.env.crypto().sha256(&payload).into();
 
-    f.client.commit_price(&f.oracle, &n32(&f.env, &f.feed_id), &commitment_hash);
+    f.client
+        .commit_price(&f.oracle, &n32(&f.env, &f.feed_id), &commitment_hash);
 
     let commitment = f.client.get_commitment(&n32(&f.env, &f.feed_id));
     assert_eq!(commitment.state, CommitmentState::ChallengeWindow);
 
     // Fast forward ledger sequence to bypass challenge window (duration is 10)
     let current_seq = f.env.ledger().sequence();
-    
+
     // Attempt reveal before window expires (should fail)
-    let attestation_payload = build_payload_bytes(&f.script_hash, &f.input_params_hash, output_value, timestamp_utc, &f.feed_id);
+    let attestation_payload = build_payload_bytes(
+        &f.script_hash,
+        &f.input_params_hash,
+        output_value,
+        timestamp_utc,
+        &f.feed_id,
+    );
     let sig = sign_payload(&f.signing_key, &attestation_payload);
 
     let early_reveal = f.client.try_reveal_price(
@@ -459,7 +486,7 @@ fn commit_and_reveal_success() {
         &output_value,
         &timestamp_utc,
         &n32(&f.env, &salt),
-        &n64(&f.env, &sig)
+        &n64(&f.env, &sig),
     );
     assert_eq!(early_reveal, Err(Ok(Error::ChallengeWindowNotExpired)));
 
@@ -473,7 +500,7 @@ fn commit_and_reveal_success() {
         &output_value,
         &timestamp_utc,
         &n32(&f.env, &salt),
-        &n64(&f.env, &sig)
+        &n64(&f.env, &sig),
     );
 
     let revealed_commitment = f.client.get_commitment(&n32(&f.env, &f.feed_id));
@@ -493,22 +520,34 @@ fn challenge_during_window_succeeds() {
     let mut payload = soroban_sdk::Bytes::new(&f.env);
     payload.append(&n32(&f.env, &f.script_hash).into());
     payload.append(&n32(&f.env, &f.input_params_hash).into());
-    for b in output_value.to_be_bytes() { payload.push_back(b); }
-    for b in timestamp_utc.to_be_bytes() { payload.push_back(b); }
+    for b in output_value.to_be_bytes() {
+        payload.push_back(b);
+    }
+    for b in timestamp_utc.to_be_bytes() {
+        payload.push_back(b);
+    }
     payload.append(&n32(&f.env, &f.feed_id).into());
     payload.append(&n32(&f.env, &salt).into());
-    let commitment_hash = f.env.crypto().sha256(&payload);
+    let commitment_hash: BytesN<32> = f.env.crypto().sha256(&payload).into();
 
-    f.client.commit_price(&f.oracle, &n32(&f.env, &f.feed_id), &commitment_hash);
+    f.client
+        .commit_price(&f.oracle, &n32(&f.env, &f.feed_id), &commitment_hash);
 
     let challenger = Address::generate(&f.env);
-    f.client.challenge_price(&challenger, &n32(&f.env, &f.feed_id), &999_999);
+    f.client
+        .challenge_price(&challenger, &n32(&f.env, &f.feed_id), &999_999);
 
     let commitment = f.client.get_commitment(&n32(&f.env, &f.feed_id));
     assert_eq!(commitment.state, CommitmentState::Disputed);
 
     // Now reveal should fail because state is not ChallengeWindow
-    let attestation_payload = build_payload_bytes(&f.script_hash, &f.input_params_hash, output_value, timestamp_utc, &f.feed_id);
+    let attestation_payload = build_payload_bytes(
+        &f.script_hash,
+        &f.input_params_hash,
+        output_value,
+        timestamp_utc,
+        &f.feed_id,
+    );
     let sig = sign_payload(&f.signing_key, &attestation_payload);
 
     let current_seq = f.env.ledger().sequence();
@@ -522,7 +561,7 @@ fn challenge_during_window_succeeds() {
         &output_value,
         &timestamp_utc,
         &n32(&f.env, &salt),
-        &n64(&f.env, &sig)
+        &n64(&f.env, &sig),
     );
     assert_eq!(reveal_res, Err(Ok(Error::InvalidCommitmentState)));
 }

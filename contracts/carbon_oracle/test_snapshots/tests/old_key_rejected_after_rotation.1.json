@@ -18,7 +18,10 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "9a2ec23e4020f577743fecfb562919f96e06d308913f68094f7db0b2c2b84eb5"
+                  "bytes": "2e083df5ac3de6d8054c271e13c43308d698833c6e84315ea93a4b0b5bf9a2b0"
+                },
+                {
+                  "u32": 10
                 }
               ]
             }
@@ -40,7 +43,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "632646639e9157ca690ce7c80efeaf6be5580d2fa09ec58cd95fa43ff00b2671"
+                  "bytes": "6d8ddb461846556bcba0e4b4d0af2252668733ec0400175f2c9c7c95af67d80b"
                 }
               ]
             }
@@ -100,10 +103,18 @@
                             },
                             {
                               "key": {
+                                "symbol": "challenge_window_duration"
+                              },
+                              "val": {
+                                "u32": 10
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "632646639e9157ca690ce7c80efeaf6be5580d2fa09ec58cd95fa43ff00b2671"
+                                "bytes": "6d8ddb461846556bcba0e4b4d0af2252668733ec0400175f2c9c7c95af67d80b"
                               }
                             }
                           ]

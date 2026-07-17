@@ -149,7 +149,12 @@ impl CarbonMarketplace {
         if e.storage().instance().has(&CONFIG) {
             return Err(MarketError::AlreadyInitialized);
         }
-        let cfg = MarketConfig { admin, registry, credit_contract, fee_bps };
+        let cfg = MarketConfig {
+            admin,
+            registry,
+            credit_contract,
+            fee_bps,
+        };
         e.storage().instance().set(&CONFIG, &cfg);
         Ok(())
     }
@@ -217,8 +222,13 @@ impl CarbonMarketplace {
         // ── RACE WINDOW: project can be suspended, seller can transfer credits ──
 
         // STEP 3: Create the listing as Active (stale checks are now "locked in").
-        let listing_id_input: soroban_sdk::Val =
-            (seller.clone(), project_id.clone(), amount, e.ledger().sequence()).into_val(&e);
+        let listing_id_input: soroban_sdk::Val = (
+            seller.clone(),
+            project_id.clone(),
+            amount,
+            e.ledger().sequence(),
+        )
+            .into_val(&e);
         let listing_id_bytes: soroban_sdk::Bytes =
             <soroban_sdk::Bytes as soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>::try_from_val(
                 &e,
@@ -409,11 +419,7 @@ impl CarbonMarketplace {
         let _: () = e.invoke_contract(
             &cfg.registry,
             &Symbol::new(&e, "issue_credits"),
-            soroban_sdk::vec![
-                &e,
-                project_id.clone().into_val(&e),
-                amount.into_val(&e)
-            ],
+            soroban_sdk::vec![&e, project_id.clone().into_val(&e), amount.into_val(&e)],
         );
 
         // Fetch the project to get the owner for minting.
