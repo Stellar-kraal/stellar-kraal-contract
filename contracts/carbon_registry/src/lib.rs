@@ -20,6 +20,10 @@ use soroban_sdk::{
 
 /// Singleton config key stored in instance storage.
 const CONFIG: Symbol = symbol_short!("CONFIG");
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
 
 /// Per-project storage key stored in persistent storage.
 /// Composite key: (Symbol("PROJECT"), BytesN<32>)
@@ -104,6 +108,9 @@ impl CarbonRegistry {
         }
         let cfg = RegistryConfig { admin, marketplace };
         e.storage().instance().set(&CONFIG, &cfg);
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -149,9 +156,9 @@ impl CarbonRegistry {
             vintage_year,
         };
 
-        e.storage()
-            .persistent()
-            .set(&project_key(&e, &id), &project);
+        let key = project_key(&e, &id);
+        e.storage().persistent().set(&key, &project);
+        Self::bump_project_ttl(&e, &key);
 
         Ok(id)
     }
@@ -170,6 +177,7 @@ impl CarbonRegistry {
 
         project.status = ProjectStatus::Verified;
         e.storage().persistent().set(&key, &project);
+        Self::bump_project_ttl(&e, &key);
         Ok(())
     }
 
@@ -191,6 +199,7 @@ impl CarbonRegistry {
 
         project.status = ProjectStatus::Suspended;
         e.storage().persistent().set(&key, &project);
+        Self::bump_project_ttl(&e, &key);
         Ok(())
     }
 
@@ -208,6 +217,7 @@ impl CarbonRegistry {
 
         project.status = ProjectStatus::Retired;
         e.storage().persistent().set(&key, &project);
+        Self::bump_project_ttl(&e, &key);
         Ok(())
     }
 
@@ -258,6 +268,7 @@ impl CarbonRegistry {
 
         project.issued_credits = new_issued;
         e.storage().persistent().set(&key, &project);
+        Self::bump_project_ttl(&e, &key);
         Ok(())
     }
 
@@ -268,10 +279,16 @@ impl CarbonRegistry {
     /// AUDIT NOTE: Callers that make decisions based on the returned `status`
     /// and then perform subsequent operations are vulnerable to TOCTOU.
     pub fn get_project(e: Env, id: BytesN<32>) -> Result<CarbonProject, RegistryError> {
-        e.storage()
-            .persistent()
-            .get(&project_key(&e, &id))
-            .ok_or(RegistryError::ProjectNotFound)
+        {
+            let key = project_key(&e, &id);
+            let project = e
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(RegistryError::ProjectNotFound)?;
+            Self::bump_project_ttl(&e, &key);
+            Ok(project)
+        }
     }
 
     /// Return the registry configuration.
@@ -282,10 +299,23 @@ impl CarbonRegistry {
     // ── Internal helpers ────────────────────────────────────────────────────
 
     fn load_config(e: &Env) -> Result<RegistryConfig, RegistryError> {
-        e.storage()
+        let cfg = e
+            .storage()
             .instance()
             .get(&CONFIG)
-            .ok_or(RegistryError::NotInitialized)
+            .ok_or(RegistryError::NotInitialized)?;
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+        Ok(cfg)
+    }
+
+    fn bump_project_ttl(e: &Env, key: &Val) {
+        e.storage().persistent().extend_ttl(
+            key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
     }
 }
 

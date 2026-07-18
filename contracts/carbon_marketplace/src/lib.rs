@@ -44,6 +44,10 @@ use soroban_sdk::{
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 const CONFIG: Symbol = symbol_short!("CONFIG");
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
 
 /// Per-listing storage key: ("LST", listing_id)
 fn listing_key(e: &Env, id: &BytesN<32>) -> Val {
@@ -156,6 +160,9 @@ impl CarbonMarketplace {
             fee_bps,
         };
         e.storage().instance().set(&CONFIG, &cfg);
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -244,9 +251,9 @@ impl CarbonMarketplace {
             price_per_credit,
             status: ListingStatus::Active,
         };
-        e.storage()
-            .persistent()
-            .set(&listing_key(&e, &listing_id), &listing);
+        let key = listing_key(&e, &listing_id);
+        e.storage().persistent().set(&key, &listing);
+        Self::bump_listing_ttl(&e, &key);
         // ── VULN-MP-01 ENDS ────────────────────────────────────────────────
 
         Ok(listing_id)
@@ -309,6 +316,7 @@ impl CarbonMarketplace {
         let mut sold_listing = listing.clone();
         sold_listing.status = ListingStatus::Sold;
         e.storage().persistent().set(&lkey, &sold_listing);
+        Self::bump_listing_ttl(&e, &lkey);
 
         // ── FIX (CC-001 / TOCTOU): Re-verify project status at purchase time ──
         // The listing only stores project_id. Re-check current registry status
@@ -377,6 +385,7 @@ impl CarbonMarketplace {
 
         listing.status = ListingStatus::Cancelled;
         e.storage().persistent().set(&lkey, &listing);
+        Self::bump_listing_ttl(&e, &lkey);
         Ok(())
     }
 
@@ -448,10 +457,16 @@ impl CarbonMarketplace {
 
     /// Return the full listing record.
     pub fn get_listing(e: Env, listing_id: BytesN<32>) -> Result<Listing, MarketError> {
-        e.storage()
-            .persistent()
-            .get(&listing_key(&e, &listing_id))
-            .ok_or(MarketError::ListingNotFound)
+        {
+            let key = listing_key(&e, &listing_id);
+            let listing = e
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(MarketError::ListingNotFound)?;
+            Self::bump_listing_ttl(&e, &key);
+            Ok(listing)
+        }
     }
 
     /// Return the marketplace configuration.
@@ -462,10 +477,23 @@ impl CarbonMarketplace {
     // ── Internal helpers ────────────────────────────────────────────────────
 
     fn load_config(e: &Env) -> Result<MarketConfig, MarketError> {
-        e.storage()
+        let cfg = e
+            .storage()
             .instance()
             .get(&CONFIG)
-            .ok_or(MarketError::NotInitialized)
+            .ok_or(MarketError::NotInitialized)?;
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+        Ok(cfg)
+    }
+
+    fn bump_listing_ttl(e: &Env, key: &Val) {
+        e.storage().persistent().extend_ttl(
+            key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
     }
 }
 
