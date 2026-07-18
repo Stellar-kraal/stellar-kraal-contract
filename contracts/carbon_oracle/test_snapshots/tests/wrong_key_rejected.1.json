@@ -18,7 +18,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "8d4d5c9db628c32481e520e9bc0b641ea841b03596705f45dbd686083ab5f76e"
+                  "bytes": "3092f17fde6b606f8fcfa433580112f0c5c2636564b0f18f80c2916445c70099"
                 },
                 {
                   "u32": 10
@@ -89,10 +89,18 @@
                             },
                             {
                               "key": {
+                                "symbol": "last_heartbeat"
+                              },
+                              "val": {
+                                "i64": 0
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "8d4d5c9db628c32481e520e9bc0b641ea841b03596705f45dbd686083ab5f76e"
+                                "bytes": "3092f17fde6b606f8fcfa433580112f0c5c2636564b0f18f80c2916445c70099"
                               }
                             }
                           ]

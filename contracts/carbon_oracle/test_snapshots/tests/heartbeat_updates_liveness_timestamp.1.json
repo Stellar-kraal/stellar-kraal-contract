@@ -18,10 +18,32 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "d8340b0e7de13985720e909497147ea8537f37230e8b697f90e8011e6090e106"
+                  "bytes": "b00c0bff6ebe6b78ca0041f6cddd820d6e3db3afb29130ce2cee9079eb9bc7f0"
                 },
                 {
                   "u32": 10
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "heartbeat",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "i64": 1720000111
                 }
               ]
             }
@@ -92,7 +114,7 @@
                                 "symbol": "last_heartbeat"
                               },
                               "val": {
-                                "i64": 0
+                                "i64": 1720000111
                               }
                             },
                             {
@@ -100,7 +122,7 @@
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "d8340b0e7de13985720e909497147ea8537f37230e8b697f90e8011e6090e106"
+                                "bytes": "b00c0bff6ebe6b78ca0041f6cddd820d6e3db3afb29130ce2cee9079eb9bc7f0"
                               }
                             }
                           ]
@@ -138,6 +160,39 @@
                 "key": {
                   "ledger_key_nonce": {
                     "nonce": 801925984706572462
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          6311999
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+            "key": {
+              "ledger_key_nonce": {
+                "nonce": 5541220902715666415
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": 5541220902715666415
                   }
                 },
                 "durability": "temporary",

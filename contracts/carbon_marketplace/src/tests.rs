@@ -1,7 +1,9 @@
 #![cfg(test)]
 
 use crate::*;
-use soroban_sdk::{symbol_short, testutils::Address as _, Address, BytesN, Env};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, testutils::Address as _, Address, BytesN, Env,
+};
 
 fn make_env() -> Env {
     let env = Env::default();
@@ -514,4 +516,77 @@ fn test_cancel_already_sold_listing_fails() {
 
     let res = ctx.market_client.try_cancel_listing(&seller, &listing_id);
     assert_eq!(res, Err(Ok(MarketError::ListingNotActive)));
+}
+
+#[contract]
+struct MockOracle;
+
+#[contractimpl]
+impl MockOracle {
+    pub fn set_stale(e: Env, stale: bool) {
+        e.storage().instance().set(&symbol_short!("STALE"), &stale);
+    }
+
+    pub fn is_price_stale(e: Env, _feed_id: BytesN<32>, _max_age_seconds: i64) -> bool {
+        e.storage()
+            .instance()
+            .get(&symbol_short!("STALE"))
+            .unwrap_or(false)
+    }
+
+    pub fn get_circuit_breaker_state(_e: Env) -> CircuitBreakerState {
+        CircuitBreakerState::Active
+    }
+}
+
+#[test]
+fn test_stale_price_feed_rejects_price_dependent_listing_creation() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+    let oracle_addr = env.register(MockOracle, ());
+    let oracle_client = MockOracleClient::new(&env, &oracle_addr);
+    oracle_client.set_stale(&true);
+
+    let feed_id = BytesN::from_array(&env, &[7u8; 32]);
+    ctx.market_client
+        .configure_oracle(&ctx.admin, &oracle_addr, &feed_id, &300_i64);
+
+    let seller = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 100);
+    let res = ctx
+        .market_client
+        .try_create_listing(&seller, &project_id, &10_i128, &5_i128);
+    assert_eq!(res, Err(Ok(MarketError::StalePriceFeed)));
+}
+
+#[test]
+fn test_circuit_breaker_freezes_and_resets_without_losing_listing_state() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 100);
+    let listing_id = ctx
+        .market_client
+        .create_listing(&seller, &project_id, &10_i128, &5_i128);
+
+    ctx.market_client
+        .set_circuit_breaker_state(&ctx.admin, &CircuitBreakerState::AdminPaused);
+    let res = ctx
+        .market_client
+        .try_purchase_listing(&buyer, &listing_id, &50_i128);
+    assert_eq!(res, Err(Ok(MarketError::CircuitBreakerOpen)));
+    assert_eq!(
+        ctx.market_client.get_listing(&listing_id).status,
+        ListingStatus::Active
+    );
+
+    ctx.market_client
+        .set_circuit_breaker_state(&ctx.admin, &CircuitBreakerState::Active);
+    ctx.market_client
+        .purchase_listing(&buyer, &listing_id, &50_i128);
+    assert_eq!(
+        ctx.market_client.get_listing(&listing_id).status,
+        ListingStatus::Sold
+    );
 }

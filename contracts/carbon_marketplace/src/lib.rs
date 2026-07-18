@@ -44,6 +44,7 @@ use soroban_sdk::{
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 const CONFIG: Symbol = symbol_short!("CONFIG");
+const CIRCUIT: Symbol = symbol_short!("CIRCUIT");
 
 /// Per-listing storage key: ("LST", listing_id)
 fn listing_key(e: &Env, id: &BytesN<32>) -> Val {
@@ -63,12 +64,27 @@ pub struct MarketConfig {
     pub credit_contract: Address,
     /// Fee in basis points charged on each sale.
     pub fee_bps: i128,
+    /// Optional oracle contract address used for staleness gating.
+    pub oracle: Option<Address>,
+    /// Feed checked before price-dependent marketplace operations.
+    pub feed_id: Option<BytesN<32>>,
+    /// Maximum acceptable price age in seconds.
+    pub max_price_age_seconds: i64,
 }
 
 /// Status of a credit listing on the marketplace.
 ///
 /// AUDIT NOTE: The Active → Sold transition in purchase_listing happens AFTER
 /// all cross-contract calls, violating check-effects-interactions (CEI).
+#[contracttype]
+#[derive(Clone, PartialEq, Debug)]
+#[repr(u32)]
+pub enum CircuitBreakerState {
+    Active = 0,
+    Tripped = 1,
+    AdminPaused = 2,
+}
+
 #[contracttype]
 #[derive(Clone, PartialEq, Debug)]
 #[repr(u32)]
@@ -128,6 +144,8 @@ pub enum MarketError {
     ProjectNotVerified = 8,
     RegistryError = 9,
     CreditError = 10,
+    StalePriceFeed = 11,
+    CircuitBreakerOpen = 12,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -154,9 +172,51 @@ impl CarbonMarketplace {
             registry,
             credit_contract,
             fee_bps,
+            oracle: None,
+            feed_id: None,
+            max_price_age_seconds: 0,
         };
         e.storage().instance().set(&CONFIG, &cfg);
         Ok(())
+    }
+
+    /// Configure oracle freshness checks for price-dependent operations.
+    pub fn configure_oracle(
+        e: Env,
+        admin: Address,
+        oracle: Address,
+        feed_id: BytesN<32>,
+        max_price_age_seconds: i64,
+    ) -> Result<(), MarketError> {
+        let mut cfg = Self::load_config(&e)?;
+        admin.require_auth();
+        if admin != cfg.admin {
+            return Err(MarketError::Unauthorized);
+        }
+        cfg.oracle = Some(oracle);
+        cfg.feed_id = Some(feed_id);
+        cfg.max_price_age_seconds = max_price_age_seconds;
+        e.storage().instance().set(&CONFIG, &cfg);
+        Ok(())
+    }
+
+    pub fn set_circuit_breaker_state(
+        e: Env,
+        admin: Address,
+        state: CircuitBreakerState,
+    ) -> Result<(), MarketError> {
+        let cfg = Self::load_config(&e)?;
+        admin.require_auth();
+        if admin != cfg.admin {
+            return Err(MarketError::Unauthorized);
+        }
+        e.storage().instance().set(&CIRCUIT, &state);
+        Ok(())
+    }
+
+    pub fn get_circuit_breaker_state(e: Env) -> Result<CircuitBreakerState, MarketError> {
+        Self::load_config(&e)?;
+        Ok(Self::circuit_state(&e))
     }
 
     // ── Listings ────────────────────────────────────────────────────────────
@@ -186,6 +246,8 @@ impl CarbonMarketplace {
     ) -> Result<BytesN<32>, MarketError> {
         seller.require_auth();
         let cfg = Self::load_config(&e)?;
+        Self::require_market_active(&e)?;
+        Self::require_fresh_price(&e, &cfg)?;
 
         if amount <= 0 || price_per_credit <= 0 {
             return Err(MarketError::InvalidAmount);
@@ -279,6 +341,8 @@ impl CarbonMarketplace {
     ) -> Result<(), MarketError> {
         buyer.require_auth();
         let cfg = Self::load_config(&e)?;
+        Self::require_market_active(&e)?;
+        Self::require_fresh_price(&e, &cfg)?;
 
         // ── VULN-MP-02 BEGINS ──────────────────────────────────────────────
         // STEP 1 (CHECK): Read listing. Listing is still Active at this point.
@@ -359,6 +423,7 @@ impl CarbonMarketplace {
     ) -> Result<(), MarketError> {
         seller.require_auth();
         let _ = Self::load_config(&e)?;
+        Self::require_market_active(&e)?;
 
         let lkey = listing_key(&e, &listing_id);
         let mut listing: Listing = e
@@ -405,6 +470,7 @@ impl CarbonMarketplace {
         amount: i128,
     ) -> Result<(), MarketError> {
         let cfg = Self::load_config(&e)?;
+        Self::require_market_active(&e)?;
 
         if amount <= 0 {
             return Err(MarketError::InvalidAmount);
@@ -460,6 +526,47 @@ impl CarbonMarketplace {
     }
 
     // ── Internal helpers ────────────────────────────────────────────────────
+
+    fn circuit_state(e: &Env) -> CircuitBreakerState {
+        e.storage()
+            .instance()
+            .get(&CIRCUIT)
+            .unwrap_or(CircuitBreakerState::Active)
+    }
+
+    fn require_market_active(e: &Env) -> Result<(), MarketError> {
+        if Self::circuit_state(e) != CircuitBreakerState::Active {
+            return Err(MarketError::CircuitBreakerOpen);
+        }
+        Ok(())
+    }
+
+    fn require_fresh_price(e: &Env, cfg: &MarketConfig) -> Result<(), MarketError> {
+        if let (Some(oracle), Some(feed_id)) = (cfg.oracle.clone(), cfg.feed_id.clone()) {
+            let oracle_state: CircuitBreakerState = e.invoke_contract(
+                &oracle,
+                &Symbol::new(e, "get_circuit_breaker_state"),
+                soroban_sdk::vec![e],
+            );
+            if oracle_state != CircuitBreakerState::Active {
+                return Err(MarketError::CircuitBreakerOpen);
+            }
+
+            let stale: bool = e.invoke_contract(
+                &oracle,
+                &Symbol::new(e, "is_price_stale"),
+                soroban_sdk::vec![
+                    e,
+                    feed_id.into_val(e),
+                    cfg.max_price_age_seconds.into_val(e)
+                ],
+            );
+            if stale {
+                return Err(MarketError::StalePriceFeed);
+            }
+        }
+        Ok(())
+    }
 
     fn load_config(e: &Env) -> Result<MarketConfig, MarketError> {
         e.storage()
