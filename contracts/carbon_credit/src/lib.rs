@@ -51,6 +51,16 @@ fn retired_supply_key(e: &Env, project_id: &BytesN<32>) -> Val {
     (symbol_short!("RSUP"), project_id.clone()).into_val(e)
 }
 
+/// Per-retire-operation dedup key in persistent storage.
+/// Composite: ("RETOP", operation_id)
+///
+/// Stored as `true` immediately before any balance mutation in `retire()`.
+/// Any subsequent call carrying the same `operation_id` sees this key present
+/// and returns `CreditError::AlreadyRetired` without touching balances.
+fn retire_op_key(e: &Env, op_id: &BytesN<32>) -> Val {
+    (symbol_short!("RETOP"), op_id.clone()).into_val(e)
+}
+
 // ── Data types ────────────────────────────────────────────────────────────────
 
 /// Credit contract configuration stored in instance storage.
@@ -109,6 +119,10 @@ pub enum CreditError {
     ProjectNotVerified = 5,
     InvalidAmount = 6,
     RegistryError = 7,
+    /// RS-01 mitigation: a `retire()` call carrying this `operation_id` has
+    /// already been executed.  The caller must generate a fresh `operation_id`
+    /// for each new retire intent.
+    AlreadyRetired = 8,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -285,11 +299,27 @@ impl CarbonCredit {
 
     /// Retire `amount` credits from `from` for a project.
     /// The credits are moved to a retired pool.
+    ///
+    /// ## RS-01 Mitigation: Operation-ID Idempotency
+    ///
+    /// `operation_id` is a caller-supplied 32-byte unique identifier for this
+    /// retire intent.  The contract stores a dedup flag at the key
+    /// `("RETOP", operation_id)` in persistent storage **before** any balance
+    /// mutation occurs.  Any subsequent call carrying the same `operation_id`
+    /// is rejected with `CreditError::AlreadyRetired` without touching any
+    /// balance or supply counter.
+    ///
+    /// The caller (wallet / backend relay) is responsible for generating a
+    /// unique `operation_id` per retire intent — typically a random 32-byte
+    /// nonce or `sha256(caller || project || amount || timestamp || random)`.
+    /// Because the flag lives in persistent ledger storage it is permanent:
+    /// a given `operation_id` can never be reused, even across ledgers.
     pub fn retire(
         e: Env,
         from: Address,
         project_id: BytesN<32>,
         amount: i128,
+        operation_id: BytesN<32>,
     ) -> Result<(), CreditError> {
         from.require_auth();
         let _ = Self::load_config(&e)?;
@@ -298,12 +328,26 @@ impl CarbonCredit {
             return Err(CreditError::InvalidAmount);
         }
 
+        // ── RS-01 MITIGATION: idempotency dedup guard ─────────────────────
+        // Check BEFORE any balance read or write. If this operation_id has
+        // already been used, reject immediately — no state changes occur.
+        let opkey = retire_op_key(&e, &operation_id);
+        if e.storage().persistent().has(&opkey) {
+            return Err(CreditError::AlreadyRetired);
+        }
+        // Record the operation_id BEFORE modifying any balance. Even if a
+        // subsequent check fails (InsufficientBalance), the operation_id is
+        // consumed. This prevents a race where two concurrent calls with the
+        // same operation_id both pass the `has()` check before either writes.
+        e.storage().persistent().set(&opkey, &true);
+        // ── END RS-01 MITIGATION ──────────────────────────────────────────
+
         let bkey = balance_key(&e, &from, &project_id);
         let current: i128 = e.storage().persistent().get(&bkey).unwrap_or(0);
         if current < amount {
             return Err(CreditError::InsufficientBalance);
         }
-        // INVARIANT: `current >= amount` checked at line 288, so this subtraction
+        // INVARIANT: `current >= amount` checked above, so this subtraction
         // cannot underflow. Safe by prior bounds check.
         #[allow(clippy::arithmetic_side_effects)]
         e.storage().persistent().set(&bkey, &(current - amount));

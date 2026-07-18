@@ -237,6 +237,7 @@ dependencies = [
 name = "carbon_credit"
 version = "0.1.0"
 dependencies = [
+ "arithmetic",
  "carbon_registry",
  "soroban-sdk",
 ]
@@ -245,6 +246,7 @@ dependencies = [
 name = "carbon_marketplace"
 version = "0.1.0"
 dependencies = [
+ "arithmetic",
  "carbon_credit",
  "carbon_registry",
  "soroban-sdk",
@@ -254,6 +256,7 @@ dependencies = [
 name = "carbon_registry"
 version = "0.1.0"
 dependencies = [
+ "arithmetic",
  "soroban-sdk",
 ]
 
@@ -261,7 +264,6 @@ dependencies = [
 name = "carbon_timelock"
 version = "0.1.0"
 dependencies = [
- "arithmetic",
  "soroban-sdk",
 ]
 

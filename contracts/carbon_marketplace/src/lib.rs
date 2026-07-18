@@ -50,6 +50,15 @@ fn listing_key(e: &Env, id: &BytesN<32>) -> Val {
     (symbol_short!("LST"), id.clone()).into_val(e)
 }
 
+/// Per-seller monotonic nonce key in instance storage: ("SCTR", seller)
+///
+/// RS-02 mitigation: ensures that two create_listing calls from the same seller
+/// in the same ledger (or with identical arguments in different ledgers) always
+/// produce different listing IDs.
+fn seller_nonce_key(e: &Env, seller: &Address) -> Val {
+    (symbol_short!("SCTR"), seller.clone()).into_val(e)
+}
+
 // ── Data types ────────────────────────────────────────────────────────────────
 
 /// Marketplace-level configuration.
@@ -128,6 +137,9 @@ pub enum MarketError {
     ProjectNotVerified = 8,
     RegistryError = 9,
     CreditError = 10,
+    /// RS-03 mitigation: the current ledger sequence exceeds the caller-supplied
+    /// `max_ledger` deadline.  The purchase intent has expired.
+    TransactionExpired = 11,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -222,20 +234,77 @@ impl CarbonMarketplace {
         // ── RACE WINDOW: project can be suspended, seller can transfer credits ──
 
         // STEP 3: Create the listing as Active (stale checks are now "locked in").
-        let listing_id_input: soroban_sdk::Val = (
-            seller.clone(),
-            project_id.clone(),
-            amount,
-            e.ledger().sequence(),
-        )
-            .into_val(&e);
-        let listing_id_bytes: soroban_sdk::Bytes =
+        //
+        // ── RS-02 MITIGATION: seller-nonce-based unique listing ID ───────────
+        // The old derivation used only (seller, project_id, amount, ledger_sequence).
+        // Two calls with identical arguments in the same ledger produced the same
+        // listing_id, allowing the second call to silently overwrite the first.
+        // price_per_credit was also missing from the hash, allowing a same-ledger
+        // call with a different price to overwrite the existing listing.
+        //
+        // Fix: include a per-seller monotonic counter (seller_nonce) and
+        // price_per_credit in the hash input.  The counter is incremented
+        // atomically (read → increment → write) before the listing is stored,
+        // so any two calls from the same seller — regardless of arguments or
+        // ledger — always produce distinct listing IDs.
+        let seller_nonce: u64 = e
+            .storage()
+            .instance()
+            .get(&seller_nonce_key(&e, &seller))
+            .unwrap_or(0u64);
+        e.storage()
+            .instance()
+            .set(&seller_nonce_key(&e, &seller), &(seller_nonce + 1));
+
+        // Build a byte buffer that uniquely encodes all inputs.
+        // We manually concatenate the fixed-width fields so the hash is always
+        // derived from a deterministic encoding regardless of Soroban Val layout:
+        //   - 32 bytes: seller address SHA256 seed (via sha256 of the address bytes)
+        //   - 32 bytes: project_id
+        //   - 16 bytes: amount (i128 big-endian)
+        //   - 16 bytes: price_per_credit (i128 big-endian)
+        //    -  4 bytes: ledger sequence (u32 big-endian)
+        //   -  8 bytes: seller_nonce (u64 big-endian)
+        // Total: 108 bytes → SHA256 → 32-byte listing_id
+        let mut preimage = soroban_sdk::Bytes::new(&e);
+
+        // 32 bytes: SHA256 of the serialized seller address
+        let seller_val: soroban_sdk::Val = seller.clone().into_val(&e);
+        let seller_bytes: soroban_sdk::Bytes =
             <soroban_sdk::Bytes as soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>::try_from_val(
                 &e,
-                &listing_id_input,
+                &seller_val,
             )
             .unwrap_or_else(|_| soroban_sdk::Bytes::new(&e));
-        let listing_id: BytesN<32> = e.crypto().sha256(&listing_id_bytes).into();
+        let seller_hash: BytesN<32> = e.crypto().sha256(&seller_bytes).into();
+        preimage.append(&soroban_sdk::Bytes::from_slice(&e, &seller_hash.to_array()));
+
+        // 32 bytes: project_id
+        preimage.append(&soroban_sdk::Bytes::from_slice(&e, &project_id.to_array()));
+
+        // 16 bytes: amount as i128 big-endian
+        preimage.append(&soroban_sdk::Bytes::from_slice(&e, &amount.to_be_bytes()));
+
+        // 16 bytes: price_per_credit as i128 big-endian
+        preimage.append(&soroban_sdk::Bytes::from_slice(
+            &e,
+            &price_per_credit.to_be_bytes(),
+        ));
+
+        // 4 bytes: ledger sequence as u32 big-endian
+        preimage.append(&soroban_sdk::Bytes::from_slice(
+            &e,
+            &e.ledger().sequence().to_be_bytes(),
+        ));
+
+        // 8 bytes: seller_nonce as u64 big-endian — ensures uniqueness per call
+        preimage.append(&soroban_sdk::Bytes::from_slice(
+            &e,
+            &seller_nonce.to_be_bytes(),
+        ));
+
+        let listing_id: BytesN<32> = e.crypto().sha256(&preimage).into();
+        // ── END RS-02 MITIGATION ─────────────────────────────────────────────
 
         let listing = Listing {
             seller,
@@ -271,14 +340,33 @@ impl CarbonMarketplace {
     /// on the same listing_id. Both callers will read status = Active, both will
     /// succeed through the cross-contract calls, and one will overwrite the other's
     /// Sold write — but both will have burned/minted credits.
+    ///
+    /// ## RS-03 Mitigation: max_ledger enforcement
+    ///
+    /// `max_ledger` is a caller-supplied ledger sequence deadline.  The contract
+    /// rejects any purchase attempt where `e.ledger().sequence() > max_ledger`,
+    /// returning `MarketError::TransactionExpired`.
+    ///
+    /// This prevents a withheld purchase intent (signed offline, relayed later)
+    /// from being executed after the buyer no longer intends to purchase.
+    /// Pass `u32::MAX` to preserve the original unbounded behaviour.
     pub fn purchase_listing(
         e: Env,
         buyer: Address,
         listing_id: BytesN<32>,
         payment_amount: i128,
+        max_ledger: u32,
     ) -> Result<(), MarketError> {
         buyer.require_auth();
         let cfg = Self::load_config(&e)?;
+
+        // ── RS-03 MITIGATION: ledger-bound expiry check ───────────────────
+        // Run immediately after auth, before any state reads or interactions.
+        // If the current ledger has passed the caller's deadline, reject.
+        if e.ledger().sequence() > max_ledger {
+            return Err(MarketError::TransactionExpired);
+        }
+        // ── END RS-03 MITIGATION ──────────────────────────────────────────
 
         // ── VULN-MP-02 BEGINS ──────────────────────────────────────────────
         // STEP 1 (CHECK): Read listing. Listing is still Active at this point.
