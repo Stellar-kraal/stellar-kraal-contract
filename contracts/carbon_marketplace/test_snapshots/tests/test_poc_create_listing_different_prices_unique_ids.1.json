@@ -28,7 +28,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 1000
+                    "lo": 10000
                   }
                 },
                 {
@@ -75,7 +75,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 200
+                    "lo": 2000
                   }
                 }
               ]
@@ -103,7 +103,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 200
+                    "lo": 2000
                   }
                 }
               ]
@@ -137,7 +137,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 3
+                    "lo": 50
                   }
                 }
               ]
@@ -154,13 +154,25 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-              "function_name": "cancel_listing",
+              "function_name": "create_listing",
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
                 },
                 {
-                  "bytes": "6a7a343a4a1b33153ec17655fa6901cf81e5cd616098b305dcef2a54fd096ddb"
+                  "bytes": "6491423f61a65a0dbadab52f4feed1a585960dd876f670e503b745eaae76d2aa"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 100
+                  }
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 1
+                  }
                 }
               ]
             }
@@ -169,6 +181,7 @@
         }
       ]
     ],
+    [],
     []
   ],
   "ledger": {
@@ -224,7 +237,7 @@
                   "symbol": "LST"
                 },
                 {
-                  "bytes": "6a7a343a4a1b33153ec17655fa6901cf81e5cd616098b305dcef2a54fd096ddb"
+                  "bytes": "49f77fd870eba952d5694fa5c91583734adeeed9b97f25ab6656780f32f9746e"
                 }
               ]
             },
@@ -244,7 +257,7 @@
                       "symbol": "LST"
                     },
                     {
-                      "bytes": "6a7a343a4a1b33153ec17655fa6901cf81e5cd616098b305dcef2a54fd096ddb"
+                      "bytes": "49f77fd870eba952d5694fa5c91583734adeeed9b97f25ab6656780f32f9746e"
                     }
                   ]
                 },
@@ -269,7 +282,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 3
+                          "lo": 50
                         }
                       }
                     },
@@ -294,7 +307,99 @@
                         "symbol": "status"
                       },
                       "val": {
-                        "u32": 2
+                        "u32": 0
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          4095
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "LST"
+                },
+                {
+                  "bytes": "ce6561190d0e2ef133a106781d087cad04fe244d510ccd87b5857ae4455db9a2"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "LST"
+                    },
+                    {
+                      "bytes": "ce6561190d0e2ef133a106781d087cad04fe244d510ccd87b5857ae4455db9a2"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 100
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "price_per_credit"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 1
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "project_id"
+                      },
+                      "val": {
+                        "bytes": "6491423f61a65a0dbadab52f4feed1a585960dd876f670e503b745eaae76d2aa"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "seller"
+                      },
+                      "val": {
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "status"
+                      },
+                      "val": {
+                        "u32": 0
                       }
                     }
                   ]
@@ -364,26 +469,6 @@
                             },
                             {
                               "key": {
-                                "symbol": "feed_id"
-                              },
-                              "val": "void"
-                            },
-                            {
-                              "key": {
-                                "symbol": "max_price_age_seconds"
-                              },
-                              "val": {
-                                "i64": 0
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "oracle"
-                              },
-                              "val": "void"
-                            },
-                            {
-                              "key": {
                                 "symbol": "registry"
                               },
                               "val": {
@@ -405,7 +490,7 @@
                           ]
                         },
                         "val": {
-                          "u64": 1
+                          "u64": 2
                         }
                       }
                     ]
@@ -528,7 +613,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 200
+                          "lo": 2000
                         }
                       }
                     },
@@ -563,7 +648,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 1000
+                          "lo": 10000
                         }
                       }
                     },
@@ -686,7 +771,7 @@
                 "val": {
                   "i128": {
                     "hi": 0,
-                    "lo": 200
+                    "lo": 2000
                   }
                 }
               }
@@ -734,7 +819,7 @@
                 "val": {
                   "i128": {
                     "hi": 0,
-                    "lo": 200
+                    "lo": 2000
                   }
                 }
               }

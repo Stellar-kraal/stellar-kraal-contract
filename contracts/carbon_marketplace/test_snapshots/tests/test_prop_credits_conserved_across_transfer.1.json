@@ -163,13 +163,16 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
                 },
                 {
-                  "bytes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  "bytes": "523f559af2db857bd60614e0a66adbf4db56781223741b8b72af392ff6b0da07"
                 },
                 {
                   "i128": {
                     "hi": 0,
                     "lo": 200
                   }
+                },
+                {
+                  "u32": 4294967295
                 }
               ]
             }
@@ -235,7 +238,7 @@
                   "symbol": "LST"
                 },
                 {
-                  "bytes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  "bytes": "523f559af2db857bd60614e0a66adbf4db56781223741b8b72af392ff6b0da07"
                 }
               ]
             },
@@ -255,7 +258,7 @@
                       "symbol": "LST"
                     },
                     {
-                      "bytes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                      "bytes": "523f559af2db857bd60614e0a66adbf4db56781223741b8b72af392ff6b0da07"
                     }
                   ]
                 },
@@ -402,6 +405,21 @@
                               }
                             }
                           ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "SCTR"
+                            },
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": 1
                         }
                       }
                     ]

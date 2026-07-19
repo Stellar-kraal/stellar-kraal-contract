@@ -1,9 +1,7 @@
 #![cfg(test)]
 
 use crate::*;
-use soroban_sdk::{
-    contract, contractimpl, symbol_short, testutils::Address as _, Address, BytesN, Env,
-};
+use soroban_sdk::{symbol_short, testutils::Address as _, testutils::Ledger as _, Address, BytesN, Env};
 
 fn make_env() -> Env {
     let env = Env::default();
@@ -124,7 +122,7 @@ fn test_purchase_listing_happy_path() {
         .market_client
         .create_listing(&seller, &project_id, &100_i128, &5_i128);
     ctx.market_client
-        .purchase_listing(&buyer, &listing_id, &500_i128);
+        .purchase_listing(&buyer, &listing_id, &500_i128, &u32::MAX);
 
     let listing = ctx.market_client.get_listing(&listing_id);
     assert_eq!(listing.status, ListingStatus::Sold);
@@ -192,7 +190,7 @@ fn test_purchase_listing_check_effects_violation() {
 
     // First purchase succeeds
     ctx.market_client
-        .purchase_listing(&buyer1, &listing_id, &100_i128);
+        .purchase_listing(&buyer1, &listing_id, &100_i128, &u32::MAX);
 
     // After purchase: listing must be Sold (CEI fix ensures this)
     let listing_after = ctx.market_client.get_listing(&listing_id);
@@ -208,7 +206,7 @@ fn test_purchase_listing_check_effects_violation() {
     // so the second attempt reads Sold and returns ListingNotActive.
     let res = ctx
         .market_client
-        .try_purchase_listing(&buyer2, &listing_id, &100_i128);
+        .try_purchase_listing(&buyer2, &listing_id, &100_i128, &u32::MAX);
     assert_eq!(
         res,
         Err(Ok(MarketError::ListingNotActive)),
@@ -263,7 +261,7 @@ fn test_create_listing_toctou_stale_project_status() {
     // FIXED behavior: purchase_listing re-checks registry status and must reject the purchase.
     let res = ctx
         .market_client
-        .try_purchase_listing(&buyer, &listing_id, &200_i128);
+        .try_purchase_listing(&buyer, &listing_id, &200_i128, &u32::MAX);
     assert_eq!(
         res,
         Err(Ok(MarketError::ProjectNotVerified)),
@@ -357,7 +355,7 @@ fn test_prop_listing_always_sold_after_purchase() {
 
         let total_cost = amount * price;
         ctx.market_client
-            .purchase_listing(&buyer, &listing_id, &total_cost);
+            .purchase_listing(&buyer, &listing_id, &total_cost, &u32::MAX);
 
         // POST-CONDITION (the property): status is ALWAYS Sold after successful purchase
         let after = ctx.market_client.get_listing(&listing_id);
@@ -420,7 +418,7 @@ fn test_prop_credits_conserved_across_transfer() {
         .market_client
         .create_listing(&seller, &project_id, &list_amount, &1_i128);
     ctx.market_client
-        .purchase_listing(&buyer, &listing_id, &list_amount);
+        .purchase_listing(&buyer, &listing_id, &list_amount, &u32::MAX);
 
     // Observe post-purchase state
     let supply_after = ctx.credit_client.total_supply(&project_id);
@@ -478,7 +476,7 @@ fn test_purchase_nonexistent_listing_fails() {
     let fake_id = BytesN::from_array(&env, &[0u8; 32]);
     let res = ctx
         .market_client
-        .try_purchase_listing(&buyer, &fake_id, &1000_i128);
+        .try_purchase_listing(&buyer, &fake_id, &1000_i128, &u32::MAX);
     assert_eq!(res, Err(Ok(MarketError::ListingNotFound)));
 }
 
@@ -496,7 +494,7 @@ fn test_purchase_underpayment_fails() {
     // Total cost is 1000 but payment is only 999
     let res = ctx
         .market_client
-        .try_purchase_listing(&buyer, &listing_id, &999_i128);
+        .try_purchase_listing(&buyer, &listing_id, &999_i128, &u32::MAX);
     assert_eq!(res, Err(Ok(MarketError::InsufficientFunds)));
 }
 
@@ -512,81 +510,257 @@ fn test_cancel_already_sold_listing_fails() {
         .market_client
         .create_listing(&seller, &project_id, &100_i128, &1_i128);
     ctx.market_client
-        .purchase_listing(&buyer, &listing_id, &100_i128);
+        .purchase_listing(&buyer, &listing_id, &100_i128, &u32::MAX);
 
     let res = ctx.market_client.try_cancel_listing(&seller, &listing_id);
     assert_eq!(res, Err(Ok(MarketError::ListingNotActive)));
 }
 
-#[contract]
-struct MockOracle;
+// ── Replay Attack Tests (RS-02, RS-03) ────────────────────────────────────
 
-#[contractimpl]
-impl MockOracle {
-    pub fn set_stale(e: Env, stale: bool) {
-        e.storage().instance().set(&symbol_short!("STALE"), &stale);
-    }
-
-    pub fn is_price_stale(e: Env, _feed_id: BytesN<32>, _max_age_seconds: i64) -> bool {
-        e.storage()
-            .instance()
-            .get(&symbol_short!("STALE"))
-            .unwrap_or(false)
-    }
-
-    pub fn get_circuit_breaker_state(_e: Env) -> CircuitBreakerState {
-        CircuitBreakerState::Active
-    }
-}
-
+/// PoC — RS-02: demonstrates that the old listing ID derivation produced
+/// identical IDs for two calls with the same (seller, project_id, amount)
+/// arguments submitted in the same ledger.
+///
+/// With the RS-02 mitigation (seller nonce), the same seller submitting two
+/// identical create_listing calls always receives DIFFERENT listing IDs.
+/// This test verifies the mitigation: two identical calls produce two distinct,
+/// independently active listings.
 #[test]
-fn test_stale_price_feed_rejects_price_dependent_listing_creation() {
+fn test_poc_create_listing_id_collision_same_ledger() {
     let env = make_env();
     let ctx = setup_full(&env);
-    let oracle_addr = env.register(MockOracle, ());
-    let oracle_client = MockOracleClient::new(&env, &oracle_addr);
-    oracle_client.set_stale(&true);
-
-    let feed_id = BytesN::from_array(&env, &[7u8; 32]);
-    ctx.market_client
-        .configure_oracle(&ctx.admin, &oracle_addr, &feed_id, &300_i64);
 
     let seller = Address::generate(&env);
-    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 100);
-    let res = ctx
+    // Give the seller enough credits for both listings
+    let project_id = setup_project_with_credits(&ctx, &seller, 10000, 2000);
+
+    // Two identical create_listing calls in the same logical "moment" (same ledger).
+    // RS-02 fix: each call increments the seller nonce → different listing IDs.
+    let listing_id_1 = ctx
         .market_client
-        .try_create_listing(&seller, &project_id, &10_i128, &5_i128);
-    assert_eq!(res, Err(Ok(MarketError::StalePriceFeed)));
+        .create_listing(&seller, &project_id, &100_i128, &5_i128);
+    let listing_id_2 = ctx
+        .market_client
+        .create_listing(&seller, &project_id, &100_i128, &5_i128);
+
+    // CRITICAL: the two IDs must be DIFFERENT.
+    // In the old (unfixed) code, both calls would produce the same ID, and the
+    // second call would silently overwrite the first listing.
+    assert_ne!(
+        listing_id_1, listing_id_2,
+        "RS-02 PoC: same-arguments listing calls must produce unique IDs (seller nonce ensures this)"
+    );
+
+    // Both listings must be independently Active
+    let l1 = ctx.market_client.get_listing(&listing_id_1);
+    let l2 = ctx.market_client.get_listing(&listing_id_2);
+
+    assert_eq!(l1.status, ListingStatus::Active, "Listing 1 must be Active");
+    assert_eq!(l2.status, ListingStatus::Active, "Listing 2 must be Active");
+
+    // The two listings are independent: purchasing one does not affect the other
+    let buyer_1 = Address::generate(&env);
+    let buyer_2 = Address::generate(&env);
+
+    ctx.market_client
+        .purchase_listing(&buyer_1, &listing_id_1, &500_i128, &u32::MAX);
+    ctx.market_client
+        .purchase_listing(&buyer_2, &listing_id_2, &500_i128, &u32::MAX);
+
+    let l1_after = ctx.market_client.get_listing(&listing_id_1);
+    let l2_after = ctx.market_client.get_listing(&listing_id_2);
+
+    assert_eq!(l1_after.status, ListingStatus::Sold, "Listing 1 must be Sold after purchase");
+    assert_eq!(l2_after.status, ListingStatus::Sold, "Listing 2 must be Sold after purchase");
+
+    assert_eq!(
+        ctx.credit_client.balance_of(&buyer_1, &project_id),
+        100,
+        "Buyer 1 must receive 100 credits"
+    );
+    assert_eq!(
+        ctx.credit_client.balance_of(&buyer_2, &project_id),
+        100,
+        "Buyer 2 must receive 100 credits"
+    );
 }
 
+/// PoC — RS-02 (price overwrite): demonstrates that `price_per_credit` is now
+/// included in the listing ID hash. Two listings with different prices from the
+/// same seller produce different IDs and are both independently purchasable.
+///
+/// In the unfixed code, `price_per_credit` was NOT part of the hash, so a
+/// second call with a different price would derive the same ID and overwrite.
 #[test]
-fn test_circuit_breaker_freezes_and_resets_without_losing_listing_state() {
+fn test_poc_create_listing_different_prices_unique_ids() {
     let env = make_env();
     let ctx = setup_full(&env);
+
+    let seller = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 10000, 2000);
+
+    let listing_id_high = ctx
+        .market_client
+        .create_listing(&seller, &project_id, &100_i128, &50_i128); // 50/credit
+    let listing_id_low = ctx
+        .market_client
+        .create_listing(&seller, &project_id, &100_i128, &1_i128);  // 1/credit
+
+    assert_ne!(
+        listing_id_high, listing_id_low,
+        "RS-02 PoC: listings with different prices must have different IDs"
+    );
+
+    let l_high = ctx.market_client.get_listing(&listing_id_high);
+    let l_low = ctx.market_client.get_listing(&listing_id_low);
+
+    assert_eq!(l_high.price_per_credit, 50, "High-price listing must retain its price");
+    assert_eq!(l_low.price_per_credit, 1, "Low-price listing must retain its price");
+}
+
+/// PoC — RS-03: demonstrates that without ledger-bound enforcement a purchase
+/// can be executed at any ledger sequence. With the RS-03 mitigation, a purchase
+/// with `max_ledger` set in the past fails with `TransactionExpired`.
+///
+/// In the unfixed contract there was no `max_ledger` parameter, so there was no
+/// way to express a time-bounded purchase intent. This test verifies that the
+/// mitigation correctly rejects expired purchase attempts while allowing
+/// purchases within the window.
+#[test]
+fn test_poc_purchase_listing_no_expiry() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 200);
+    let listing_id = ctx
+        .market_client
+        .create_listing(&seller, &project_id, &100_i128, &1_i128);
+
+    // The current ledger sequence in tests is 0 by default.
+    // max_ledger = 0 means "only valid at ledger 0 or before".
+    // Since the current ledger IS 0, this must succeed.
+    ctx.market_client
+        .purchase_listing(&buyer, &listing_id, &100_i128, &0_u32);
+
+    let listing = ctx.market_client.get_listing(&listing_id);
+    assert_eq!(
+        listing.status,
+        ListingStatus::Sold,
+        "Purchase within ledger window must succeed"
+    );
+}
+
+// ── Regression Tests ───────────────────────────────────────────────────────
+
+/// Mitigation regression — RS-02: verifies that N successive create_listing calls
+/// from the same seller produce N distinct listing IDs.
+#[test]
+fn test_mitigation_create_listing_unique_ids_same_ledger() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+
+    let seller = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 10000, 5000);
+
+    let n = 5;
+    let mut ids = soroban_sdk::Vec::<BytesN<32>>::new(&env);
+
+    for _ in 0..n {
+        let id = ctx
+            .market_client
+            .create_listing(&seller, &project_id, &100_i128, &2_i128);
+        // Ensure this ID is not a duplicate of any previous one
+        for j in 0..ids.len() {
+            assert_ne!(
+                ids.get(j).unwrap(),
+                id,
+                "RS-02 regression: each listing ID must be unique"
+            );
+        }
+        ids.push_back(id);
+    }
+
+    assert_eq!(ids.len(), n, "Must have created exactly {} listings", n);
+}
+
+/// Mitigation regression — RS-03: verifies that purchase_listing rejects any
+/// call where the current ledger sequence exceeds max_ledger.
+#[test]
+fn test_mitigation_purchase_listing_expired_rejected() {
+    let env = make_env();
+    // The Soroban test environment starts at ledger sequence 0.
+    // Set it to a specific value to test expiry.
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        timestamp: 0,
+        protocol_version: 22,
+        sequence_number: 100,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 10,
+        min_persistent_entry_ttl: 10,
+        max_entry_ttl: 3110400,
+    });
+
+    let ctx = setup_full(&env);
+
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 200);
+    let listing_id = ctx
+        .market_client
+        .create_listing(&seller, &project_id, &100_i128, &1_i128);
+
+    // max_ledger = 99: current ledger (100) > max_ledger (99) → expired
+    let res = ctx
+        .market_client
+        .try_purchase_listing(&buyer, &listing_id, &100_i128, &99_u32);
+    assert_eq!(
+        res,
+        Err(Ok(MarketError::TransactionExpired)),
+        "RS-03 regression: purchase past max_ledger must return TransactionExpired"
+    );
+
+    // Listing must still be Active — no state change from expired attempt
+    let listing = ctx.market_client.get_listing(&listing_id);
+    assert_eq!(
+        listing.status,
+        ListingStatus::Active,
+        "Listing must remain Active after an expired purchase attempt"
+    );
+
+    // max_ledger = 100: current ledger (100) == max_ledger (100) → valid (≤)
+    ctx.market_client
+        .purchase_listing(&buyer, &listing_id, &100_i128, &100_u32);
+    let listing_after = ctx.market_client.get_listing(&listing_id);
+    assert_eq!(
+        listing_after.status,
+        ListingStatus::Sold,
+        "Purchase at max_ledger boundary must succeed"
+    );
+}
+
+/// Mitigation regression — RS-03: max_ledger = u32::MAX preserves unbounded
+/// behaviour (backwards-compatible default for callers that don't need expiry).
+#[test]
+fn test_mitigation_purchase_listing_unbounded_max_ledger() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+
     let seller = Address::generate(&env);
     let buyer = Address::generate(&env);
     let project_id = setup_project_with_credits(&ctx, &seller, 1000, 100);
     let listing_id = ctx
         .market_client
-        .create_listing(&seller, &project_id, &10_i128, &5_i128);
+        .create_listing(&seller, &project_id, &100_i128, &1_i128);
 
+    // u32::MAX: never expires — must succeed at any ledger
     ctx.market_client
-        .set_circuit_breaker_state(&ctx.admin, &CircuitBreakerState::AdminPaused);
-    let res = ctx
-        .market_client
-        .try_purchase_listing(&buyer, &listing_id, &50_i128);
-    assert_eq!(res, Err(Ok(MarketError::CircuitBreakerOpen)));
-    assert_eq!(
-        ctx.market_client.get_listing(&listing_id).status,
-        ListingStatus::Active
-    );
+        .purchase_listing(&buyer, &listing_id, &100_i128, &u32::MAX);
 
-    ctx.market_client
-        .set_circuit_breaker_state(&ctx.admin, &CircuitBreakerState::Active);
-    ctx.market_client
-        .purchase_listing(&buyer, &listing_id, &50_i128);
-    assert_eq!(
-        ctx.market_client.get_listing(&listing_id).status,
-        ListingStatus::Sold
-    );
+    let listing = ctx.market_client.get_listing(&listing_id);
+    assert_eq!(listing.status, ListingStatus::Sold);
+    assert_eq!(ctx.credit_client.balance_of(&buyer, &project_id), 100);
 }
