@@ -18,7 +18,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "e075bcb4de1ce917d810e038145061b044a9d53c008fd420be8cde1b1973197f"
+                  "bytes": "8d125fd1cafc9af0bf7f3d7e9c87d2ff62fcf7b7e8ab347e17a2b215022cf64b"
                 },
                 {
                   "u32": 10
@@ -49,16 +49,16 @@
                   "bytes": "beef000000000000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "i64": 1234567
+                  "i64": 100
                 },
                 {
-                  "i64": 1720051200
+                  "i64": 1720000000
                 },
                 {
                   "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "bytes": "0a8f6df59999c3aefe61651a6b06240b124149bf8398b3f30eac921e320cf279f2efe6b64a890218c79565f50e8ae20c03c3853411d57cbcdaaa929343633008"
+                  "bytes": "9d942ab37e9e55fffa7bc3eab3f9ec55e6bac9d887d89a75ecaad1cbf61e7c65fff60283e2d997c05f6ac4391a92ddc5cc1bd3b5117b46edfb2a3cb1667d1b0e"
                 }
               ]
             }
@@ -66,7 +66,45 @@
           "sub_invocations": []
         }
       ]
-    ]
+    ],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "submit_price",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "bytes": "dead000000000000000000000000000000000000000000000000000000000000"
+                },
+                {
+                  "bytes": "beef000000000000000000000000000000000000000000000000000000000000"
+                },
+                {
+                  "i64": 250
+                },
+                {
+                  "i64": 1720000060
+                },
+                {
+                  "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
+                },
+                {
+                  "bytes": "8354d981a9fee1f785167e9956f5c1efd1613395e16c044db29ee7c50ed7b1b4d5123348564903fc53ea7e158e6108f37e7181397344924ab75a1de4a9aac001"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    []
   ],
   "ledger": {
     "protocol_version": 22,
@@ -128,7 +166,7 @@
                         "symbol": "output_value"
                       },
                       "val": {
-                        "i64": 1234567
+                        "i64": 250
                       }
                     },
                     {
@@ -152,7 +190,7 @@
                         "symbol": "timestamp_utc"
                       },
                       "val": {
-                        "i64": 1720051200
+                        "i64": 1720000060
                       }
                     }
                   ]
@@ -189,6 +227,14 @@
                     "storage": [
                       {
                         "key": {
+                          "symbol": "CIRCUIT"
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
                           "symbol": "CONFIG"
                         },
                         "val": {
@@ -222,7 +268,7 @@
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "e075bcb4de1ce917d810e038145061b044a9d53c008fd420be8cde1b1973197f"
+                                "bytes": "8d125fd1cafc9af0bf7f3d7e9c87d2ff62fcf7b7e8ab347e17a2b215022cf64b"
                               }
                             }
                           ]
@@ -260,6 +306,39 @@
                 "key": {
                   "ledger_key_nonce": {
                     "nonce": 801925984706572462
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          6311999
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+            "key": {
+              "ledger_key_nonce": {
+                "nonce": 1033654523790656264
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": 1033654523790656264
                   }
                 },
                 "durability": "temporary",

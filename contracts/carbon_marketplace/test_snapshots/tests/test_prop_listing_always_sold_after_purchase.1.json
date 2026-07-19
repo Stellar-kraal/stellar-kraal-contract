@@ -695,6 +695,26 @@
                             },
                             {
                               "key": {
+                                "symbol": "feed_id"
+                              },
+                              "val": "void"
+                            },
+                            {
+                              "key": {
+                                "symbol": "max_price_age_seconds"
+                              },
+                              "val": {
+                                "i64": 0
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "oracle"
+                              },
+                              "val": "void"
+                            },
+                            {
+                              "key": {
                                 "symbol": "registry"
                               },
                               "val": {

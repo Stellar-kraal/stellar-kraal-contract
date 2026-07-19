@@ -565,3 +565,72 @@ fn challenge_during_window_succeeds() {
     );
     assert_eq!(reveal_res, Err(Ok(Error::InvalidCommitmentState)));
 }
+
+#[test]
+fn is_price_stale_respects_configured_max_age() {
+    let f = Fixture::new();
+    f.env.ledger().with_mut(|li| li.timestamp = 1_720_000_000);
+    f.submit_ok(100, 1_719_999_700, None, None, None, None);
+
+    assert!(!f.client.is_price_stale(&n32(&f.env, &f.feed_id), &300_i64));
+    assert!(f.client.is_price_stale(&n32(&f.env, &f.feed_id), &299_i64));
+}
+
+#[test]
+fn heartbeat_updates_liveness_timestamp() {
+    let f = Fixture::new();
+    f.client.heartbeat(&f.oracle, &1_720_000_111_i64);
+    let cfg = f.client.get_config();
+    assert_eq!(cfg.last_heartbeat, 1_720_000_111);
+}
+
+#[test]
+fn circuit_breaker_trip_and_reset() {
+    let f = Fixture::new();
+    assert_eq!(
+        f.client.get_circuit_breaker_state(),
+        crate::CircuitBreakerState::Active
+    );
+
+    f.client.trip_circuit_breaker(&f.admin);
+    assert_eq!(
+        f.client.get_circuit_breaker_state(),
+        crate::CircuitBreakerState::Tripped
+    );
+
+    let res = f.client.try_heartbeat(&f.oracle, &1_720_000_222_i64);
+    assert_eq!(res, Err(Ok(Error::CircuitBreakerOpen)));
+
+    f.client.reset_circuit_breaker(&f.admin);
+    assert_eq!(
+        f.client.get_circuit_breaker_state(),
+        crate::CircuitBreakerState::Active
+    );
+}
+
+#[test]
+fn large_price_deviation_trips_circuit_breaker() {
+    let f = Fixture::new();
+    f.submit_ok(100, 1_720_000_000, None, None, None, None);
+    let payload = build_payload_bytes(
+        &f.script_hash,
+        &f.input_params_hash,
+        250,
+        1_720_000_060,
+        &f.feed_id,
+    );
+    let sig = sign_payload(&f.signing_key, &payload);
+    f.client.submit_price(
+        &f.oracle,
+        &n32(&f.env, &f.script_hash),
+        &n32(&f.env, &f.input_params_hash),
+        &250_i64,
+        &1_720_000_060_i64,
+        &n32(&f.env, &f.feed_id),
+        &n64(&f.env, &sig),
+    );
+    assert_eq!(
+        f.client.get_circuit_breaker_state(),
+        crate::CircuitBreakerState::Tripped
+    );
+}
