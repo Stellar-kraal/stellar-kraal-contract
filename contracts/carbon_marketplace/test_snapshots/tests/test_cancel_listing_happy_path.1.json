@@ -160,7 +160,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
                 },
                 {
-                  "bytes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  "bytes": "6a7a343a4a1b33153ec17655fa6901cf81e5cd616098b305dcef2a54fd096ddb"
                 }
               ]
             }
@@ -224,7 +224,7 @@
                   "symbol": "LST"
                 },
                 {
-                  "bytes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  "bytes": "6a7a343a4a1b33153ec17655fa6901cf81e5cd616098b305dcef2a54fd096ddb"
                 }
               ]
             },
@@ -244,7 +244,7 @@
                       "symbol": "LST"
                     },
                     {
-                      "bytes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                      "bytes": "6a7a343a4a1b33153ec17655fa6901cf81e5cd616098b305dcef2a54fd096ddb"
                     }
                   ]
                 },
@@ -371,6 +371,21 @@
                               }
                             }
                           ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "SCTR"
+                            },
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": 1
                         }
                       }
                     ]
