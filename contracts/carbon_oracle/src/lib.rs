@@ -27,11 +27,7 @@ use soroban_sdk::{
 // ── Storage keys ─────────────────────────────────────────────────────────────
 
 const CONFIG: Symbol = symbol_short!("CONFIG");
-const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
-const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
-const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
-const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
-const MAX_AGGREGATION_SOURCES: u32 = 10;
+const CIRCUIT: Symbol = symbol_short!("CIRCUIT");
 
 fn feed_key(_e: &Env, feed_id: &BytesN<32>) -> (Symbol, BytesN<32>) {
     (symbol_short!("FEED"), feed_id.clone())
@@ -71,6 +67,8 @@ pub struct Config {
     pub oracle_pubkey: BytesN<32>,
     /// Duration of the challenge window in ledgers.
     pub challenge_window_duration: u32,
+    /// Last accepted heartbeat timestamp from the oracle operator.
+    pub last_heartbeat: i64,
 }
 
 /// A commitment to a price entry.
@@ -130,6 +128,15 @@ pub struct AggregationMetadata {
     pub timestamp_utc: i64,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum CircuitBreakerState {
+    Active = 0,
+    Tripped = 1,
+    AdminPaused = 2,
+}
+
 /// Complete aggregated price entry with per-source values and metadata.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -174,6 +181,10 @@ pub enum Error {
     InvalidReveal = 11,
     /// The commitment is in an invalid state for this operation.
     InvalidCommitmentState = 12,
+    /// Price update deviated beyond the configured circuit-breaker threshold.
+    CircuitBreakerTripped = 13,
+    /// Contract operations are paused by the circuit breaker.
+    CircuitBreakerOpen = 14,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -294,11 +305,30 @@ impl CarbonOracle {
                 admin,
                 oracle_pubkey,
                 challenge_window_duration,
+                last_heartbeat: 0,
             },
         );
         e.storage()
             .instance()
             .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+        Ok(())
+    }
+
+    fn circuit_state(e: &Env) -> CircuitBreakerState {
+        e.storage()
+            .instance()
+            .get(&CIRCUIT)
+            .unwrap_or(CircuitBreakerState::Active)
+    }
+
+    fn set_circuit_state(e: &Env, state: CircuitBreakerState) {
+        e.storage().instance().set(&CIRCUIT, &state);
+    }
+
+    fn require_active(e: &Env) -> Result<(), Error> {
+        if Self::circuit_state(e) != CircuitBreakerState::Active {
+            return Err(Error::CircuitBreakerOpen);
+        }
         Ok(())
     }
 
@@ -328,6 +358,7 @@ impl CarbonOracle {
         signature: BytesN<64>,
     ) -> Result<(), Error> {
         let cfg = require_config(&e)?;
+        Self::require_active(&e)?;
         oracle.require_auth();
 
         // ── 1. Build the canonical 113-byte payload ───────────────────────────
@@ -344,6 +375,27 @@ impl CarbonOracle {
         // ── 2. Verify Ed25519 signature ───────────────────────────────────────
         e.crypto()
             .ed25519_verify(&cfg.oracle_pubkey, &payload, &signature);
+
+        if let Some(previous) = e
+            .storage()
+            .persistent()
+            .get::<_, PriceEntry>(&feed_key(&e, &feed_id))
+        {
+            let delta = if output_value >= previous.output_value {
+                output_value.saturating_sub(previous.output_value)
+            } else {
+                previous.output_value.saturating_sub(output_value)
+            };
+            let baseline = if previous.output_value < 0 {
+                previous.output_value.saturating_neg()
+            } else {
+                previous.output_value
+            };
+            if baseline > 0 && i128::from(delta) * 10_000_i128 > i128::from(baseline) * 10_000_i128
+            {
+                Self::set_circuit_state(&e, CircuitBreakerState::Tripped);
+            }
+        }
 
         // ── 3. Store the price entry ──────────────────────────────────────────
         let entry = PriceEntry {
@@ -723,6 +775,70 @@ impl CarbonOracle {
             );
             Ok(entry)
         }
+    }
+
+    /// Return true when `feed_id` has no price or its timestamp is older than `max_age_seconds`.
+    pub fn is_price_stale(
+        e: Env,
+        feed_id: BytesN<32>,
+        max_age_seconds: i64,
+    ) -> Result<bool, Error> {
+        require_config(&e)?;
+        let entry: PriceEntry = e
+            .storage()
+            .persistent()
+            .get(&feed_key(&e, &feed_id))
+            .ok_or(Error::FeedNotFound)?;
+        let now = e.ledger().timestamp() as i64;
+        Ok(now.saturating_sub(entry.timestamp_utc) > max_age_seconds)
+    }
+
+    /// Record an oracle heartbeat for liveness monitoring.
+    pub fn heartbeat(e: Env, oracle: Address, timestamp_utc: i64) -> Result<(), Error> {
+        let mut cfg = require_config(&e)?;
+        Self::require_active(&e)?;
+        oracle.require_auth();
+        cfg.last_heartbeat = timestamp_utc;
+        e.storage().instance().set(&CONFIG, &cfg);
+        Ok(())
+    }
+
+    /// Manually trip the circuit breaker. Only admin may call.
+    pub fn trip_circuit_breaker(e: Env, admin: Address) -> Result<(), Error> {
+        let cfg = require_config(&e)?;
+        admin.require_auth();
+        if admin != cfg.admin {
+            return Err(Error::Unauthorized);
+        }
+        Self::set_circuit_state(&e, CircuitBreakerState::Tripped);
+        Ok(())
+    }
+
+    /// Admin pause. Kept distinct from automatic `Tripped` state.
+    pub fn admin_pause(e: Env, admin: Address) -> Result<(), Error> {
+        let cfg = require_config(&e)?;
+        admin.require_auth();
+        if admin != cfg.admin {
+            return Err(Error::Unauthorized);
+        }
+        Self::set_circuit_state(&e, CircuitBreakerState::AdminPaused);
+        Ok(())
+    }
+
+    /// Reset the circuit breaker to active. Only admin may call.
+    pub fn reset_circuit_breaker(e: Env, admin: Address) -> Result<(), Error> {
+        let cfg = require_config(&e)?;
+        admin.require_auth();
+        if admin != cfg.admin {
+            return Err(Error::Unauthorized);
+        }
+        Self::set_circuit_state(&e, CircuitBreakerState::Active);
+        Ok(())
+    }
+
+    pub fn get_circuit_breaker_state(e: Env) -> Result<CircuitBreakerState, Error> {
+        require_config(&e)?;
+        Ok(Self::circuit_state(&e))
     }
 
     /// Read the current contract configuration (admin + oracle public key).

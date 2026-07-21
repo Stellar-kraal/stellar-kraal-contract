@@ -18,7 +18,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "6e8474bcb21a7def840f090e8934ccea33c91a933063e834abc24a8f7a9955d2"
+                  "bytes": "f508709433db8351e999f1f443dea6d68c7bd8106cbd9d8df7ac2f0ed2c2ec70"
                 },
                 {
                   "u32": 10
@@ -43,7 +43,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "40e6d35ed471593f20b73cac4bb725ac3bec8da3bd01be95f772f9df84952240"
+                  "bytes": "992632a7685e9b58ab4ed984a0f96e3c33f9fc8eb26ae7cf6d24ae8f763f0cef"
                 }
               ]
             }
@@ -80,7 +80,7 @@
                   "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "bytes": "b6c0b4394616fe1511f017d3da9de0c8f3caf0346eede0afe635d4da2124c21f95fe595ede68c44aa3ff88450e2942a399cca45206b0b487e5c37704279ab70b"
+                  "bytes": "7d8b4ee5f26ffd8f351d447a3a8aeff8afc30e60e6ffcce6448a9d4f02619ecceb5a26e79bf2edbc8a6d50148fae778a8182d21afb76212c8a03079bf42de60f"
                 }
               ]
             }
@@ -233,10 +233,18 @@
                             },
                             {
                               "key": {
+                                "symbol": "last_heartbeat"
+                              },
+                              "val": {
+                                "i64": 0
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "40e6d35ed471593f20b73cac4bb725ac3bec8da3bd01be95f772f9df84952240"
+                                "bytes": "992632a7685e9b58ab4ed984a0f96e3c33f9fc8eb26ae7cf6d24ae8f763f0cef"
                               }
                             }
                           ]

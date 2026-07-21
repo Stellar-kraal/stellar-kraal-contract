@@ -17,12 +17,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from dataclasses import dataclass, asdict
 from typing import Any, Protocol
 
 
 from oracle_bridge.attestation import OracleSigner, SignedAttestation, sha256
+logger = logging.getLogger(__name__)
+
 from oracle_bridge.aggregation import (
     AggregationConfig,
     AggregationResult,
@@ -168,6 +171,26 @@ class OracleBridge:
         self._client = client
         self._aggregation_config = aggregation_config
 
+    def _submit_with_circuit_breaker_alert(
+        self, attestation: SignedAttestation
+    ) -> str:
+        try:
+            return self._client.submit_price(attestation)
+        except Exception as exc:
+            message = str(exc)
+            if "CircuitBreaker" in message or "#13" in message or "#14" in message:
+                logger.error(
+                    "oracle_circuit_breaker_tripped",
+                    extra={
+                        "event": "oracle_circuit_breaker_tripped",
+                        "feed_id": attestation.payload.feed_id.hex(),
+                        "timestamp_utc": attestation.payload.timestamp_utc,
+                        "output_value": attestation.payload.output_value,
+                        "reason": message,
+                    },
+                )
+            raise
+
     def process(self, result: GEEResult) -> tuple[SignedAttestation, str]:
         """
         Sign *result* and submit the attestation (single-source).
@@ -185,7 +208,7 @@ class OracleBridge:
             timestamp_utc=result.timestamp_utc,
             feed_id=result.feed_id,
         )
-        tx_ref = self._client.submit_price(attestation)
+        tx_ref = self._submit_with_circuit_breaker_alert(attestation)
         return attestation, tx_ref
 
     def commit(self, result: GEEResult) -> tuple[bytes, str]:
@@ -318,7 +341,7 @@ class OracleBridge:
         )
 
         # Submit the aggregate attestation
-        tx_ref = self._client.submit_price(attestation)
+        tx_ref = self._submit_with_circuit_breaker_alert(attestation)
 
         # Build result with provenance
         result = AggregatedPriceResult(

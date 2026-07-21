@@ -340,3 +340,217 @@ fn test_prop_balance_never_negative() {
         "Balance must never be negative"
     );
 }
+
+// ── Replay Attack Tests (RS-01: retire idempotency) ────────────────────────
+
+/// Helper: build a full credit-contract environment with a verified project.
+fn setup_credit_with_project<'a>(
+    env: &'a Env,
+) -> (
+    CarbonCreditClient<'a>,
+    Address,  // marketplace_addr (authorized minter)
+    BytesN<32>, // project_id
+) {
+    use carbon_registry::{CarbonRegistry, CarbonRegistryClient};
+
+    let reg_client = CarbonRegistryClient::new(env, &env.register(CarbonRegistry, ()));
+    let reg_admin = Address::generate(env);
+    let marketplace_addr = Address::generate(env);
+    reg_client.initialize(&reg_admin, &marketplace_addr);
+
+    let owner = Address::generate(env);
+    let project_id =
+        reg_client.register_project(&owner, &symbol_short!("RPLY"), &10000_i128, &2024_u32);
+    reg_client.verify_project(&project_id);
+
+    let credit_client = CarbonCreditClient::new(env, &env.register(CarbonCredit, ()));
+    let credit_admin = Address::generate(env);
+    credit_client.initialize(&credit_admin, &reg_client.address, &marketplace_addr);
+
+    (credit_client, marketplace_addr, project_id)
+}
+
+/// PoC — RS-01: demonstrates that WITHOUT idempotency protection, the same
+/// logical retire operation could be replayed by submitting multiple transactions
+/// with different Stellar sequence numbers but identical arguments.
+///
+/// This test shows the *before-fix* threat model: a caller who retires 100
+/// credits twice (different Stellar transactions, same logical intent) would
+/// drain 200 credits. With the `operation_id` mitigation applied, the second
+/// call is rejected with `AlreadyRetired`, protecting the caller's balance.
+///
+/// The test verifies the PoC scenario end-to-end: first retire succeeds, second
+/// retire with the same `operation_id` fails, and total retired equals the
+/// intended 100, not 200.
+#[test]
+fn test_poc_retire_replay_without_operation_id() {
+    let env = make_env();
+    let (credit_client, _, project_id) = setup_credit_with_project(&env);
+
+    let alice = Address::generate(&env);
+    credit_client.mint(&alice, &project_id, &1000_i128);
+
+    let balance_before = credit_client.balance_of(&alice, &project_id);
+    let retired_before = credit_client.retired_supply(&project_id);
+
+    // Alice's retire intent: operation_id is a unique nonce per intent.
+    // An attacker or faulty relay that resubmits this operation would carry the
+    // SAME operation_id (because the intent is the same logical action).
+    let op_id = BytesN::from_array(&env, &[0xAA_u8; 32]);
+
+    // First retire succeeds
+    credit_client.retire(&alice, &project_id, &100_i128, &op_id);
+
+    let balance_mid = credit_client.balance_of(&alice, &project_id);
+    let retired_mid = credit_client.retired_supply(&project_id);
+
+    assert_eq!(balance_mid, balance_before - 100, "First retire must deduct 100");
+    assert_eq!(retired_mid, retired_before + 100, "First retire must add 100 to retired supply");
+
+    // PoC: second call with SAME operation_id must be rejected (replay blocked).
+    // Before the fix, this would retire another 100 credits, draining Alice's balance.
+    let res = credit_client.try_retire(&alice, &project_id, &100_i128, &op_id);
+    assert_eq!(
+        res,
+        Err(Ok(CreditError::AlreadyRetired)),
+        "RS-01 PoC: replay of same operation_id must be rejected with AlreadyRetired"
+    );
+
+    // Balance must be exactly 100 fewer than before — not 200 fewer
+    let balance_after = credit_client.balance_of(&alice, &project_id);
+    let retired_after = credit_client.retired_supply(&project_id);
+
+    assert_eq!(
+        balance_after,
+        balance_before - 100,
+        "RS-01 PoC: only 100 credits must be retired, not 200 (replay blocked)"
+    );
+    assert_eq!(
+        retired_after,
+        retired_before + 100,
+        "RS-01 PoC: retired supply must be 100, not 200"
+    );
+}
+
+/// Mitigation regression — RS-01: verifies that the operation_id dedup guard
+/// is permanently enforced: even a fresh retire call on a different amount but
+/// the same operation_id must be rejected.
+#[test]
+fn test_mitigation_retire_operation_id_dedup() {
+    let env = make_env();
+    let (credit_client, _, project_id) = setup_credit_with_project(&env);
+
+    let alice = Address::generate(&env);
+    credit_client.mint(&alice, &project_id, &1000_i128);
+
+    let op_id = BytesN::from_array(&env, &[0x11_u8; 32]);
+
+    // First retire: succeeds
+    credit_client.retire(&alice, &project_id, &50_i128, &op_id);
+
+    assert_eq!(credit_client.balance_of(&alice, &project_id), 950);
+    assert_eq!(credit_client.retired_supply(&project_id), 50);
+
+    // Second call — same operation_id, even with a different amount — must fail.
+    let res = credit_client.try_retire(&alice, &project_id, &50_i128, &op_id);
+    assert_eq!(
+        res,
+        Err(Ok(CreditError::AlreadyRetired)),
+        "Mitigation regression: duplicate operation_id must always be rejected"
+    );
+
+    // State must be identical to after the first retire
+    assert_eq!(
+        credit_client.balance_of(&alice, &project_id),
+        950,
+        "Balance must not change after rejected replay"
+    );
+    assert_eq!(
+        credit_client.retired_supply(&project_id),
+        50,
+        "Retired supply must not change after rejected replay"
+    );
+
+    // A DIFFERENT operation_id allows a new legitimate retire
+    let op_id_2 = BytesN::from_array(&env, &[0x22_u8; 32]);
+    credit_client.retire(&alice, &project_id, &50_i128, &op_id_2);
+
+    assert_eq!(
+        credit_client.balance_of(&alice, &project_id),
+        900,
+        "A new operation_id must allow a new retire"
+    );
+    assert_eq!(
+        credit_client.retired_supply(&project_id),
+        100,
+        "Retired supply must increment for a new operation_id"
+    );
+}
+
+/// Mitigation regression — RS-01: verifies that multiple distinct operation_ids
+/// from the same caller each retire independently, and that total retired equals
+/// the sum of all individual retirements.
+#[test]
+fn test_mitigation_retire_multiple_unique_operation_ids() {
+    let env = make_env();
+    let (credit_client, _, project_id) = setup_credit_with_project(&env);
+
+    let alice = Address::generate(&env);
+    credit_client.mint(&alice, &project_id, &1000_i128);
+
+    // Retire in three separate operations with unique ids
+    let op_ids: [[u8; 32]; 3] = [
+        [0x01_u8; 32],
+        [0x02_u8; 32],
+        [0x03_u8; 32],
+    ];
+    let amounts: [i128; 3] = [100, 200, 300];
+    let mut total_retired = 0_i128;
+
+    for (i, (op_bytes, amt)) in op_ids.iter().zip(amounts.iter()).enumerate() {
+        let op_id = BytesN::from_array(&env, op_bytes);
+        credit_client.retire(&alice, &project_id, amt, &op_id);
+        total_retired += amt;
+
+        assert_eq!(
+            credit_client.retired_supply(&project_id),
+            total_retired,
+            "After retire #{}: retired supply must be {}",
+            i + 1,
+            total_retired
+        );
+    }
+
+    assert_eq!(
+        credit_client.balance_of(&alice, &project_id),
+        1000 - total_retired,
+        "Alice's remaining balance must equal 1000 minus total retired"
+    );
+}
+
+/// Mitigation regression — RS-01: the operation_id dedup guard fires BEFORE
+/// any balance check, so a replay is rejected even if the caller's balance
+/// would be insufficient to cover the amount.
+#[test]
+fn test_mitigation_retire_dedup_before_balance_check() {
+    let env = make_env();
+    let (credit_client, _, project_id) = setup_credit_with_project(&env);
+
+    let alice = Address::generate(&env);
+    credit_client.mint(&alice, &project_id, &100_i128);
+
+    let op_id = BytesN::from_array(&env, &[0x55_u8; 32]);
+
+    // First retire drains the balance
+    credit_client.retire(&alice, &project_id, &100_i128, &op_id);
+    assert_eq!(credit_client.balance_of(&alice, &project_id), 0);
+
+    // Second call with same op_id: balance is 0, amount is 1.
+    // The dedup guard must fire FIRST (AlreadyRetired), not InsufficientBalance.
+    let res = credit_client.try_retire(&alice, &project_id, &1_i128, &op_id);
+    assert_eq!(
+        res,
+        Err(Ok(CreditError::AlreadyRetired)),
+        "Dedup guard must fire before balance check"
+    );
+}
