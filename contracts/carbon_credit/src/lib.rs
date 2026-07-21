@@ -32,6 +32,10 @@ use soroban_sdk::{
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 const CONFIG: Symbol = symbol_short!("CONFIG");
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
 
 /// Per-(owner, project) balance key in persistent storage.
 /// Composite: ("BAL", owner_address, project_id)
@@ -149,6 +153,9 @@ impl CarbonCredit {
             marketplace,
         };
         e.storage().instance().set(&CONFIG, &cfg);
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -205,6 +212,7 @@ impl CarbonCredit {
             .checked_add(amount)
             .ok_or(CreditError::InvalidAmount)?;
         e.storage().persistent().set(&bkey, &new_balance);
+        Self::bump_persistent_ttl(&e, &bkey);
 
         // Update total supply
         let skey = supply_key(&e, &project_id);
@@ -212,7 +220,7 @@ impl CarbonCredit {
         let new_supply = current_supply
             .checked_add(amount)
             .ok_or(CreditError::InvalidAmount)?;
-        e.storage().persistent().set(&skey, &new_supply);
+        Self::write_amount_or_remove(&e, &skey, new_supply);
         // ── VULN-CC-01 ENDS ────────────────────────────────────────────────
 
         Ok(())
@@ -250,15 +258,12 @@ impl CarbonCredit {
         // INVARIANT: `from_bal >= amount` checked at line 223, so this subtraction
         // cannot underflow. Safe by prior bounds check.
         #[allow(clippy::arithmetic_side_effects)]
-        e.storage()
-            .persistent()
-            .set(&from_key, &(from_bal - amount));
-        e.storage().persistent().set(
-            &to_key,
-            &(to_bal
-                .checked_add(amount)
-                .ok_or(CreditError::InvalidAmount)?),
-        );
+        Self::write_amount_or_remove(&e, &from_key, from_bal - amount);
+        let new_to_bal = to_bal
+            .checked_add(amount)
+            .ok_or(CreditError::InvalidAmount)?;
+        e.storage().persistent().set(&to_key, &new_to_bal);
+        Self::bump_persistent_ttl(&e, &to_key);
 
         Ok(())
     }
@@ -286,13 +291,13 @@ impl CarbonCredit {
         // INVARIANT: `current >= amount` checked at line 257, so this subtraction
         // cannot underflow. Safe by prior bounds check.
         #[allow(clippy::arithmetic_side_effects)]
-        e.storage().persistent().set(&bkey, &(current - amount));
+        Self::write_amount_or_remove(&e, &bkey, current - amount);
 
         // Reduce total supply
         let skey = supply_key(&e, &project_id);
         let current_supply: i128 = e.storage().persistent().get(&skey).unwrap_or(0);
         let new_supply = current_supply.saturating_sub(amount);
-        e.storage().persistent().set(&skey, &new_supply);
+        Self::write_amount_or_remove(&e, &skey, new_supply);
 
         Ok(())
     }
@@ -350,13 +355,13 @@ impl CarbonCredit {
         // INVARIANT: `current >= amount` checked above, so this subtraction
         // cannot underflow. Safe by prior bounds check.
         #[allow(clippy::arithmetic_side_effects)]
-        e.storage().persistent().set(&bkey, &(current - amount));
+        Self::write_amount_or_remove(&e, &bkey, current - amount);
 
         // Update total supply and retired supply
         let skey = supply_key(&e, &project_id);
         let current_supply: i128 = e.storage().persistent().get(&skey).unwrap_or(0);
         let new_supply = current_supply.saturating_sub(amount);
-        e.storage().persistent().set(&skey, &new_supply);
+        Self::write_amount_or_remove(&e, &skey, new_supply);
 
         let rkey = retired_supply_key(&e, &project_id);
         let current_retired: i128 = e.storage().persistent().get(&rkey).unwrap_or(0);
@@ -364,6 +369,7 @@ impl CarbonCredit {
             .checked_add(amount)
             .ok_or(CreditError::InvalidAmount)?;
         e.storage().persistent().set(&rkey, &new_retired);
+        Self::bump_persistent_ttl(&e, &rkey);
 
         Ok(())
     }
@@ -411,10 +417,32 @@ impl CarbonCredit {
     // ── Internal helpers ────────────────────────────────────────────────────
 
     fn load_config(e: &Env) -> Result<CreditConfig, CreditError> {
-        e.storage()
+        let cfg = e
+            .storage()
             .instance()
             .get(&CONFIG)
-            .ok_or(CreditError::NotInitialized)
+            .ok_or(CreditError::NotInitialized)?;
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+        Ok(cfg)
+    }
+
+    fn bump_persistent_ttl(e: &Env, key: &Val) {
+        e.storage().persistent().extend_ttl(
+            key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
+    }
+
+    fn write_amount_or_remove(e: &Env, key: &Val, amount: i128) {
+        if amount == 0 {
+            e.storage().persistent().remove(key);
+        } else {
+            e.storage().persistent().set(key, &amount);
+            Self::bump_persistent_ttl(e, key);
+        }
     }
 }
 

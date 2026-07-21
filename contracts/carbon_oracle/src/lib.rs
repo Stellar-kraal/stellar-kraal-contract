@@ -190,10 +190,15 @@ pub enum Error {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn require_config(e: &Env) -> Result<Config, Error> {
-    e.storage()
+    let cfg = e
+        .storage()
         .instance()
         .get(&CONFIG)
-        .ok_or(Error::NotInitialized)
+        .ok_or(Error::NotInitialized)?;
+    e.storage()
+        .instance()
+        .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+    Ok(cfg)
 }
 
 /// Build the canonical 113-byte attestation payload that is signed / verified.
@@ -303,6 +308,9 @@ impl CarbonOracle {
                 last_heartbeat: 0,
             },
         );
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -397,9 +405,13 @@ impl CarbonOracle {
             input_params_hash,
             recorded_at: e.ledger().sequence(),
         };
-        e.storage()
-            .persistent()
-            .set(&feed_key(&e, &feed_id), &entry);
+        let key = feed_key(&e, &feed_id);
+        e.storage().persistent().set(&key, &entry);
+        e.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
 
         Ok(())
     }
@@ -413,6 +425,9 @@ impl CarbonOracle {
         }
         cfg.challenge_window_duration = duration;
         e.storage().instance().set(&CONFIG, &cfg);
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -443,6 +458,11 @@ impl CarbonOracle {
         };
 
         e.storage().persistent().set(&key, &commitment);
+        e.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
         Ok(())
     }
 
@@ -478,6 +498,11 @@ impl CarbonOracle {
 
         commitment.state = CommitmentState::Disputed;
         e.storage().persistent().set(&key, &commitment);
+        e.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
 
         Ok(())
     }
@@ -548,6 +573,11 @@ impl CarbonOracle {
         // Transition to Revealed
         commitment.state = CommitmentState::Revealed;
         e.storage().persistent().set(&key, &commitment);
+        e.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
 
         // Store the final price entry
         let entry = PriceEntry {
@@ -573,25 +603,48 @@ impl CarbonOracle {
         }
         cfg.oracle_pubkey = new_pubkey;
         e.storage().instance().set(&CONFIG, &cfg);
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         Ok(())
     }
 
     /// Read the latest price entry for a given feed.
     pub fn get_price(e: Env, feed_id: BytesN<32>) -> Result<PriceEntry, Error> {
         require_config(&e)?;
-        e.storage()
-            .persistent()
-            .get(&feed_key(&e, &feed_id))
-            .ok_or(Error::FeedNotFound)
+        {
+            let key = feed_key(&e, &feed_id);
+            let entry = e
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(Error::FeedNotFound)?;
+            e.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_TTL_THRESHOLD,
+                PERSISTENT_TTL_EXTEND_TO,
+            );
+            Ok(entry)
+        }
     }
 
     /// Read the current commitment for a given feed.
     pub fn get_commitment(e: Env, feed_id: BytesN<32>) -> Result<PriceCommitment, Error> {
         require_config(&e)?;
-        e.storage()
-            .persistent()
-            .get(&commitment_key(&e, &feed_id))
-            .ok_or(Error::CommitmentNotFound)
+        {
+            let key = commitment_key(&e, &feed_id);
+            let commitment = e
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(Error::CommitmentNotFound)?;
+            e.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_TTL_THRESHOLD,
+                PERSISTENT_TTL_EXTEND_TO,
+            );
+            Ok(commitment)
+        }
     }
 
     /// Submit an aggregated price entry with per-source values and metadata.
@@ -649,6 +702,9 @@ impl CarbonOracle {
 
         // num_sources as big-endian u32 (4 bytes)
         let num_sources = source_values.len();
+        if num_sources > MAX_AGGREGATION_SOURCES {
+            return Err(Error::InvalidAttestation);
+        }
         for b in num_sources.to_be_bytes() {
             msg.push_back(b);
         }
@@ -686,9 +742,13 @@ impl CarbonOracle {
             recorded_at: e.ledger().sequence(),
         };
 
-        e.storage()
-            .persistent()
-            .set(&agg_feed_key(&e, &feed_id), &entry);
+        let key = agg_feed_key(&e, &feed_id);
+        e.storage().persistent().set(&key, &entry);
+        e.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
 
         Ok(())
     }
@@ -701,10 +761,20 @@ impl CarbonOracle {
         feed_id: BytesN<32>,
     ) -> Result<AggregatedPriceEntry, Error> {
         require_config(&e)?;
-        e.storage()
-            .persistent()
-            .get(&agg_feed_key(&e, &feed_id))
-            .ok_or(Error::FeedNotFound)
+        {
+            let key = agg_feed_key(&e, &feed_id);
+            let entry = e
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(Error::FeedNotFound)?;
+            e.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_TTL_THRESHOLD,
+                PERSISTENT_TTL_EXTEND_TO,
+            );
+            Ok(entry)
+        }
     }
 
     /// Return true when `feed_id` has no price or its timestamp is older than `max_age_seconds`.
