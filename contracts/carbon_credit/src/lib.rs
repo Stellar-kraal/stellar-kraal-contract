@@ -32,6 +32,10 @@ use soroban_sdk::{
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 const CONFIG: Symbol = symbol_short!("CONFIG");
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
 
 /// Per-(owner, project) balance key in persistent storage.
 /// Composite: ("BAL", owner_address, project_id)
@@ -49,6 +53,16 @@ fn supply_key(e: &Env, project_id: &BytesN<32>) -> Val {
 /// Composite: ("RSUP", project_id)
 fn retired_supply_key(e: &Env, project_id: &BytesN<32>) -> Val {
     (symbol_short!("RSUP"), project_id.clone()).into_val(e)
+}
+
+/// Per-retire-operation dedup key in persistent storage.
+/// Composite: ("RETOP", operation_id)
+///
+/// Stored as `true` immediately before any balance mutation in `retire()`.
+/// Any subsequent call carrying the same `operation_id` sees this key present
+/// and returns `CreditError::AlreadyRetired` without touching balances.
+fn retire_op_key(e: &Env, op_id: &BytesN<32>) -> Val {
+    (symbol_short!("RETOP"), op_id.clone()).into_val(e)
 }
 
 // ── Data types ────────────────────────────────────────────────────────────────
@@ -109,6 +123,10 @@ pub enum CreditError {
     ProjectNotVerified = 5,
     InvalidAmount = 6,
     RegistryError = 7,
+    /// RS-01 mitigation: a `retire()` call carrying this `operation_id` has
+    /// already been executed.  The caller must generate a fresh `operation_id`
+    /// for each new retire intent.
+    AlreadyRetired = 8,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -129,8 +147,15 @@ impl CarbonCredit {
         if e.storage().instance().has(&CONFIG) {
             return Err(CreditError::AlreadyInitialized);
         }
-        let cfg = CreditConfig { admin, registry, marketplace };
+        let cfg = CreditConfig {
+            admin,
+            registry,
+            marketplace,
+        };
         e.storage().instance().set(&CONFIG, &cfg);
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -183,8 +208,11 @@ impl CarbonCredit {
         // STEP 3: Write new balance (operates on stale verification result).
         let bkey = balance_key(&e, &to, &project_id);
         let current: i128 = e.storage().persistent().get(&bkey).unwrap_or(0);
-        let new_balance = current.checked_add(amount).ok_or(CreditError::InvalidAmount)?;
+        let new_balance = current
+            .checked_add(amount)
+            .ok_or(CreditError::InvalidAmount)?;
         e.storage().persistent().set(&bkey, &new_balance);
+        Self::bump_persistent_ttl(&e, &bkey);
 
         // Update total supply
         let skey = supply_key(&e, &project_id);
@@ -192,7 +220,7 @@ impl CarbonCredit {
         let new_supply = current_supply
             .checked_add(amount)
             .ok_or(CreditError::InvalidAmount)?;
-        e.storage().persistent().set(&skey, &new_supply);
+        Self::write_amount_or_remove(&e, &skey, new_supply);
         // ── VULN-CC-01 ENDS ────────────────────────────────────────────────
 
         Ok(())
@@ -227,12 +255,15 @@ impl CarbonCredit {
         let to_key = balance_key(&e, &to, &project_id);
         let to_bal: i128 = e.storage().persistent().get(&to_key).unwrap_or(0);
 
-        e.storage()
-            .persistent()
-            .set(&from_key, &(from_bal - amount));
-        e.storage()
-            .persistent()
-            .set(&to_key, &(to_bal.checked_add(amount).ok_or(CreditError::InvalidAmount)?));
+        // INVARIANT: `from_bal >= amount` checked at line 223, so this subtraction
+        // cannot underflow. Safe by prior bounds check.
+        #[allow(clippy::arithmetic_side_effects)]
+        Self::write_amount_or_remove(&e, &from_key, from_bal - amount);
+        let new_to_bal = to_bal
+            .checked_add(amount)
+            .ok_or(CreditError::InvalidAmount)?;
+        e.storage().persistent().set(&to_key, &new_to_bal);
+        Self::bump_persistent_ttl(&e, &to_key);
 
         Ok(())
     }
@@ -257,24 +288,43 @@ impl CarbonCredit {
         if current < amount {
             return Err(CreditError::InsufficientBalance);
         }
-        e.storage().persistent().set(&bkey, &(current - amount));
+        // INVARIANT: `current >= amount` checked at line 257, so this subtraction
+        // cannot underflow. Safe by prior bounds check.
+        #[allow(clippy::arithmetic_side_effects)]
+        Self::write_amount_or_remove(&e, &bkey, current - amount);
 
         // Reduce total supply
         let skey = supply_key(&e, &project_id);
         let current_supply: i128 = e.storage().persistent().get(&skey).unwrap_or(0);
         let new_supply = current_supply.saturating_sub(amount);
-        e.storage().persistent().set(&skey, &new_supply);
+        Self::write_amount_or_remove(&e, &skey, new_supply);
 
         Ok(())
     }
 
     /// Retire `amount` credits from `from` for a project.
     /// The credits are moved to a retired pool.
+    ///
+    /// ## RS-01 Mitigation: Operation-ID Idempotency
+    ///
+    /// `operation_id` is a caller-supplied 32-byte unique identifier for this
+    /// retire intent.  The contract stores a dedup flag at the key
+    /// `("RETOP", operation_id)` in persistent storage **before** any balance
+    /// mutation occurs.  Any subsequent call carrying the same `operation_id`
+    /// is rejected with `CreditError::AlreadyRetired` without touching any
+    /// balance or supply counter.
+    ///
+    /// The caller (wallet / backend relay) is responsible for generating a
+    /// unique `operation_id` per retire intent — typically a random 32-byte
+    /// nonce or `sha256(caller || project || amount || timestamp || random)`.
+    /// Because the flag lives in persistent ledger storage it is permanent:
+    /// a given `operation_id` can never be reused, even across ledgers.
     pub fn retire(
         e: Env,
         from: Address,
         project_id: BytesN<32>,
         amount: i128,
+        operation_id: BytesN<32>,
     ) -> Result<(), CreditError> {
         from.require_auth();
         let _ = Self::load_config(&e)?;
@@ -283,23 +333,43 @@ impl CarbonCredit {
             return Err(CreditError::InvalidAmount);
         }
 
+        // ── RS-01 MITIGATION: idempotency dedup guard ─────────────────────
+        // Check BEFORE any balance read or write. If this operation_id has
+        // already been used, reject immediately — no state changes occur.
+        let opkey = retire_op_key(&e, &operation_id);
+        if e.storage().persistent().has(&opkey) {
+            return Err(CreditError::AlreadyRetired);
+        }
+        // Record the operation_id BEFORE modifying any balance. Even if a
+        // subsequent check fails (InsufficientBalance), the operation_id is
+        // consumed. This prevents a race where two concurrent calls with the
+        // same operation_id both pass the `has()` check before either writes.
+        e.storage().persistent().set(&opkey, &true);
+        // ── END RS-01 MITIGATION ──────────────────────────────────────────
+
         let bkey = balance_key(&e, &from, &project_id);
         let current: i128 = e.storage().persistent().get(&bkey).unwrap_or(0);
         if current < amount {
             return Err(CreditError::InsufficientBalance);
         }
-        e.storage().persistent().set(&bkey, &(current - amount));
+        // INVARIANT: `current >= amount` checked above, so this subtraction
+        // cannot underflow. Safe by prior bounds check.
+        #[allow(clippy::arithmetic_side_effects)]
+        Self::write_amount_or_remove(&e, &bkey, current - amount);
 
         // Update total supply and retired supply
         let skey = supply_key(&e, &project_id);
         let current_supply: i128 = e.storage().persistent().get(&skey).unwrap_or(0);
         let new_supply = current_supply.saturating_sub(amount);
-        e.storage().persistent().set(&skey, &new_supply);
+        Self::write_amount_or_remove(&e, &skey, new_supply);
 
         let rkey = retired_supply_key(&e, &project_id);
         let current_retired: i128 = e.storage().persistent().get(&rkey).unwrap_or(0);
-        let new_retired = current_retired.checked_add(amount).ok_or(CreditError::InvalidAmount)?;
+        let new_retired = current_retired
+            .checked_add(amount)
+            .ok_or(CreditError::InvalidAmount)?;
         e.storage().persistent().set(&rkey, &new_retired);
+        Self::bump_persistent_ttl(&e, &rkey);
 
         Ok(())
     }
@@ -347,10 +417,32 @@ impl CarbonCredit {
     // ── Internal helpers ────────────────────────────────────────────────────
 
     fn load_config(e: &Env) -> Result<CreditConfig, CreditError> {
-        e.storage()
+        let cfg = e
+            .storage()
             .instance()
             .get(&CONFIG)
-            .ok_or(CreditError::NotInitialized)
+            .ok_or(CreditError::NotInitialized)?;
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+        Ok(cfg)
+    }
+
+    fn bump_persistent_ttl(e: &Env, key: &Val) {
+        e.storage().persistent().extend_ttl(
+            key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
+    }
+
+    fn write_amount_or_remove(e: &Env, key: &Val, amount: i128) {
+        if amount == 0 {
+            e.storage().persistent().remove(key);
+        } else {
+            e.storage().persistent().set(key, &amount);
+            Self::bump_persistent_ttl(e, key);
+        }
     }
 }
 

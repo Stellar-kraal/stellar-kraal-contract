@@ -256,7 +256,7 @@
                   "symbol": "LST"
                 },
                 {
-                  "bytes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  "bytes": "444911f38c136a3437c575e18c70f2246e04fa12a6b22e6f0fd969242ad5a62e"
                 }
               ]
             },
@@ -276,7 +276,7 @@
                       "symbol": "LST"
                     },
                     {
-                      "bytes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                      "bytes": "444911f38c136a3437c575e18c70f2246e04fa12a6b22e6f0fd969242ad5a62e"
                     }
                   ]
                 },
@@ -396,6 +396,26 @@
                             },
                             {
                               "key": {
+                                "symbol": "feed_id"
+                              },
+                              "val": "void"
+                            },
+                            {
+                              "key": {
+                                "symbol": "max_price_age_seconds"
+                              },
+                              "val": {
+                                "i64": 0
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "oracle"
+                              },
+                              "val": "void"
+                            },
+                            {
+                              "key": {
                                 "symbol": "registry"
                               },
                               "val": {
@@ -403,6 +423,21 @@
                               }
                             }
                           ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "SCTR"
+                            },
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": 1
                         }
                       }
                     ]

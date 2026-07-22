@@ -262,3 +262,28 @@ class TestEndToEndPipeline:
         att_b, _, _prov_b = bridge.process(result_b)
 
         assert att_a.payload.input_params_hash == att_b.payload.input_params_hash
+
+
+def test_circuit_breaker_trip_emits_structured_alert(caplog):
+    signer = OracleSigner.generate()
+    gee_result = GEEResult(
+        script_source=GEE_SCRIPT,
+        input_params=GEE_PARAMS,
+        output_value=4_815_162_342,
+        feed_id="carbon/rwanda/2024",
+        timestamp_utc=1_720_051_200,
+    )
+    class CircuitBreakerClient:
+        def submit_price(self, attestation: SignedAttestation) -> str:
+            raise ValueError("On-chain rejection: CircuitBreakerTripped")
+
+    bridge = OracleBridge(signer=signer, client=CircuitBreakerClient())
+    with caplog.at_level("ERROR", logger="oracle_bridge.bridge"):
+        with pytest.raises(ValueError, match="CircuitBreakerTripped"):
+            bridge.process(gee_result)
+
+    record = next(
+        record for record in caplog.records if record.event == "oracle_circuit_breaker_tripped"
+    )
+    assert record.feed_id == gee_result.feed_id.encode().ljust(32, b"\0").hex()
+    assert record.output_value == gee_result.output_value

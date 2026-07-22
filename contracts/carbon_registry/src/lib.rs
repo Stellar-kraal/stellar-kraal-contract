@@ -12,14 +12,18 @@
 #![allow(clippy::too_many_arguments)]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN,
-    Env, IntoVal, Symbol, Val,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env,
+    IntoVal, Symbol, Val,
 };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 /// Singleton config key stored in instance storage.
 const CONFIG: Symbol = symbol_short!("CONFIG");
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
 
 /// Per-project storage key stored in persistent storage.
 /// Composite key: (Symbol("PROJECT"), BytesN<32>)
@@ -98,16 +102,15 @@ impl CarbonRegistry {
     // ── Initialization ──────────────────────────────────────────────────────
 
     /// One-time initialization. Stores admin and marketplace addresses.
-    pub fn initialize(
-        e: Env,
-        admin: Address,
-        marketplace: Address,
-    ) -> Result<(), RegistryError> {
+    pub fn initialize(e: Env, admin: Address, marketplace: Address) -> Result<(), RegistryError> {
         if e.storage().instance().has(&CONFIG) {
             return Err(RegistryError::AlreadyInitialized);
         }
         let cfg = RegistryConfig { admin, marketplace };
         e.storage().instance().set(&CONFIG, &cfg);
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -134,13 +137,14 @@ impl CarbonRegistry {
         // Derive a deterministic ID from owner + name + vintage
         // We encode the key as XDR via to_xdr which returns Bytes directly
         let id_input: soroban_sdk::Val = (owner.clone(), name.clone(), vintage_year).into_val(&e);
-        let id_bytes: Bytes = <Bytes as soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>::try_from_val(&e, &id_input)
-            .unwrap_or_else(|_| {
-                // Fallback: encode each component separately
-                let mut b = Bytes::new(&e);
-                b.extend_from_array(&vintage_year.to_be_bytes());
-                b
-            });
+        let id_bytes: Bytes =
+            <Bytes as soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>::try_from_val(&e, &id_input)
+                .unwrap_or_else(|_| {
+                    // Fallback: encode each component separately
+                    let mut b = Bytes::new(&e);
+                    b.extend_from_array(&vintage_year.to_be_bytes());
+                    b
+                });
         let id: BytesN<32> = e.crypto().sha256(&id_bytes).into();
 
         let project = CarbonProject {
@@ -152,9 +156,9 @@ impl CarbonRegistry {
             vintage_year,
         };
 
-        e.storage()
-            .persistent()
-            .set(&project_key(&e, &id), &project);
+        let key = project_key(&e, &id);
+        e.storage().persistent().set(&key, &project);
+        Self::bump_project_ttl(&e, &key);
 
         Ok(id)
     }
@@ -173,6 +177,7 @@ impl CarbonRegistry {
 
         project.status = ProjectStatus::Verified;
         e.storage().persistent().set(&key, &project);
+        Self::bump_project_ttl(&e, &key);
         Ok(())
     }
 
@@ -194,6 +199,7 @@ impl CarbonRegistry {
 
         project.status = ProjectStatus::Suspended;
         e.storage().persistent().set(&key, &project);
+        Self::bump_project_ttl(&e, &key);
         Ok(())
     }
 
@@ -211,6 +217,7 @@ impl CarbonRegistry {
 
         project.status = ProjectStatus::Retired;
         e.storage().persistent().set(&key, &project);
+        Self::bump_project_ttl(&e, &key);
         Ok(())
     }
 
@@ -218,11 +225,7 @@ impl CarbonRegistry {
     ///
     /// Callable by marketplace OR admin. Increments `issued_credits`.
     /// Fails if project is not Verified or if the new total would exceed `total_credits`.
-    pub fn issue_credits(
-        e: Env,
-        id: BytesN<32>,
-        amount: i128,
-    ) -> Result<(), RegistryError> {
+    pub fn issue_credits(e: Env, id: BytesN<32>, amount: i128) -> Result<(), RegistryError> {
         let cfg = Self::load_config(&e)?;
 
         // Either the marketplace or the admin must authorize this call.
@@ -265,6 +268,7 @@ impl CarbonRegistry {
 
         project.issued_credits = new_issued;
         e.storage().persistent().set(&key, &project);
+        Self::bump_project_ttl(&e, &key);
         Ok(())
     }
 
@@ -275,10 +279,16 @@ impl CarbonRegistry {
     /// AUDIT NOTE: Callers that make decisions based on the returned `status`
     /// and then perform subsequent operations are vulnerable to TOCTOU.
     pub fn get_project(e: Env, id: BytesN<32>) -> Result<CarbonProject, RegistryError> {
-        e.storage()
-            .persistent()
-            .get(&project_key(&e, &id))
-            .ok_or(RegistryError::ProjectNotFound)
+        {
+            let key = project_key(&e, &id);
+            let project = e
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(RegistryError::ProjectNotFound)?;
+            Self::bump_project_ttl(&e, &key);
+            Ok(project)
+        }
     }
 
     /// Return the registry configuration.
@@ -289,10 +299,23 @@ impl CarbonRegistry {
     // ── Internal helpers ────────────────────────────────────────────────────
 
     fn load_config(e: &Env) -> Result<RegistryConfig, RegistryError> {
-        e.storage()
+        let cfg = e
+            .storage()
             .instance()
             .get(&CONFIG)
-            .ok_or(RegistryError::NotInitialized)
+            .ok_or(RegistryError::NotInitialized)?;
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+        Ok(cfg)
+    }
+
+    fn bump_project_ttl(e: &Env, key: &Val) {
+        e.storage().persistent().extend_ttl(
+            key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
     }
 }
 

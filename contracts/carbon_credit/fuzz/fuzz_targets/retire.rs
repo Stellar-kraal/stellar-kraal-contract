@@ -6,7 +6,7 @@ use carbon_registry::{CarbonRegistry, CarbonRegistryClient};
 
 #[derive(arbitrary::Arbitrary, Debug)]
 pub struct RetireInput {
-    pub actions: Vec<(u8, i128)>, // (account_index, amount)
+    pub actions: Vec<(u8, i128, [u8; 32])>, // (account_index, amount, operation_id_bytes)
 }
 
 fuzz_target!(|input: RetireInput| {
@@ -33,14 +33,15 @@ fuzz_target!(|input: RetireInput| {
         accounts.push(acc);
     }
 
-    for (acc_idx, amount) in input.actions {
+    for (acc_idx, amount, op_id_bytes) in input.actions {
         let target_acc = &accounts[(acc_idx % 5) as usize];
+        let operation_id = BytesN::from_array(&env, &op_id_bytes);
         
         let pre_balance = credit_client.balance_of(target_acc, &project_id);
         let pre_supply = credit_client.total_supply(&project_id);
         let pre_retired = credit_client.retired_supply(&project_id);
         
-        let res = credit_client.try_retire(target_acc, &project_id, &amount);
+        let res = credit_client.try_retire(target_acc, &project_id, &amount, &operation_id);
         
         let post_balance = credit_client.balance_of(target_acc, &project_id);
         let post_supply = credit_client.total_supply(&project_id);
@@ -51,6 +52,7 @@ fuzz_target!(|input: RetireInput| {
             assert_eq!(post_supply, pre_supply - amount);
             assert_eq!(post_retired, pre_retired + amount);
         } else {
+            // On failure (including AlreadyRetired), balances must be unchanged
             assert_eq!(post_retired, pre_retired);
         }
         

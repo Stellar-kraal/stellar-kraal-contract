@@ -1,7 +1,7 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::{Address as _}, Address, BytesN, Env, symbol_short};
 use crate::*;
+use soroban_sdk::{symbol_short, testutils::Address as _, Address, BytesN, Env};
 
 fn make_env() -> Env {
     let env = Env::default();
@@ -25,7 +25,7 @@ fn setup(env: &Env) -> (CarbonRegistryClient<'_>, Address, Address) {
 fn register_and_verify(
     client: &CarbonRegistryClient<'_>,
     env: &Env,
-    admin: &Address,
+    _admin: &Address,
     total_credits: i128,
 ) -> BytesN<32> {
     let owner = Address::generate(env);
@@ -125,7 +125,10 @@ fn test_get_project_not_found_fails() {
     let fake_id: BytesN<32> = BytesN::from_array(&env, &[0u8; 32]);
     let res = client.try_get_project(&fake_id);
     // try_ returns Err(Ok(error)) for contract errors
-    assert!(res.is_err(), "get_project on unknown id must return an error");
+    assert!(
+        res.is_err(),
+        "get_project on unknown id must return an error"
+    );
 }
 
 // ── Issue credits ──────────────────────────────────────────────────────────

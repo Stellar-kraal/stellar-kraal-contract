@@ -39,6 +39,47 @@ export interface RetirementRow {
   created_at: number;
 }
 
+// ── Indexer / Webhook types ────────────────────────────────────────────────
+
+export interface LedgerCursorRow {
+  event_type: string;
+  last_ledger: number;
+  updated_at: number;
+}
+
+export interface IndexedEventRow {
+  id: number;
+  contract_id: string;
+  topic: string;
+  transaction_hash: string;
+  ledger: number;
+  payload: string;
+  indexed_at: number;
+}
+
+export interface WebhookRegistrationRow {
+  id: string;
+  url: string;
+  secret: string;
+  event_type: string;
+  active: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface WebhookDeliveryRow {
+  id: number;
+  webhook_id: string;
+  event_id: number;
+  status: 'pending' | 'delivered' | 'failed';
+  attempt_count: number;
+  last_attempt_at: number | null;
+  next_attempt_at: number;
+  response_status: number | null;
+  error_message: string | null;
+  created_at: number;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS idempotency_records (
   key             TEXT PRIMARY KEY,
@@ -87,6 +128,54 @@ CREATE TABLE IF NOT EXISTS chain_events (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chain_events_dedup ON chain_events(dedup_id);
+
+CREATE TABLE IF NOT EXISTS ledger_cursors (
+  event_type   TEXT PRIMARY KEY,
+  last_ledger  INTEGER NOT NULL DEFAULT 0,
+  updated_at   INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS indexed_events (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  contract_id      TEXT NOT NULL,
+  topic            TEXT NOT NULL,
+  transaction_hash TEXT NOT NULL,
+  ledger           INTEGER NOT NULL,
+  payload          TEXT NOT NULL,
+  indexed_at       INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_indexed_events_dedup
+  ON indexed_events(contract_id, topic, transaction_hash);
+CREATE INDEX IF NOT EXISTS idx_indexed_events_ledger
+  ON indexed_events(ledger);
+
+CREATE TABLE IF NOT EXISTS webhook_registrations (
+  id         TEXT PRIMARY KEY,
+  url        TEXT NOT NULL,
+  secret     TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  active     INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_registrations_event
+  ON webhook_registrations(event_type);
+
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  webhook_id      TEXT NOT NULL REFERENCES webhook_registrations(id),
+  event_id        INTEGER NOT NULL REFERENCES indexed_events(id),
+  status          TEXT NOT NULL CHECK (status IN ('pending','delivered','failed')),
+  attempt_count   INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at INTEGER,
+  next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  response_status INTEGER,
+  error_message   TEXT,
+  created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_pending
+  ON webhook_deliveries(status, next_attempt_at)
+  WHERE status IN ('pending','failed');
 `;
 
 /**
@@ -240,5 +329,165 @@ export class Store {
     return this.db.prepare('SELECT * FROM retirements WHERE id = ?').get(id) as
       | RetirementRow
       | undefined;
+  }
+
+  // ── Ledger cursors ─────────────────────────────────────────────────────
+
+  getCursor(eventType: string): LedgerCursorRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM ledger_cursors WHERE event_type = ?')
+      .get(eventType) as LedgerCursorRow | undefined;
+  }
+
+  upsertCursor(eventType: string, lastLedger: number, updatedAt: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO ledger_cursors (event_type, last_ledger, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(event_type) DO UPDATE SET
+           last_ledger = excluded.last_ledger,
+           updated_at  = excluded.updated_at`,
+      )
+      .run(eventType, lastLedger, updatedAt);
+  }
+
+  // ── Indexed events ─────────────────────────────────────────────────────
+
+  /**
+   * Insert an indexed event, ignoring duplicates.
+   * Returns the inserted row's id, or undefined if it was a duplicate.
+   */
+  insertIndexedEventIfAbsent(row: Omit<IndexedEventRow, 'id'>): number | undefined {
+    const info = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO indexed_events
+           (contract_id, topic, transaction_hash, ledger, payload, indexed_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.contract_id,
+        row.topic,
+        row.transaction_hash,
+        row.ledger,
+        row.payload,
+        row.indexed_at,
+      );
+    return info.changes > 0 ? Number(info.lastInsertRowid) : undefined;
+  }
+
+  getIndexedEvent(id: number): IndexedEventRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM indexed_events WHERE id = ?')
+      .get(id) as IndexedEventRow | undefined;
+  }
+
+  // ── Webhook registrations ──────────────────────────────────────────────
+
+  insertWebhook(row: WebhookRegistrationRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO webhook_registrations
+           (id, url, secret, event_type, active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(row.id, row.url, row.secret, row.event_type, row.active, row.created_at, row.updated_at);
+  }
+
+  getWebhook(id: string): WebhookRegistrationRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM webhook_registrations WHERE id = ?')
+      .get(id) as WebhookRegistrationRow | undefined;
+  }
+
+  updateWebhook(
+    id: string,
+    fields: Partial<Pick<WebhookRegistrationRow, 'url' | 'secret' | 'active'>>,
+    updatedAt: number,
+  ): void {
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    if (fields.url !== undefined) { sets.push('url = ?'); values.push(fields.url); }
+    if (fields.secret !== undefined) { sets.push('secret = ?'); values.push(fields.secret); }
+    if (fields.active !== undefined) { sets.push('active = ?'); values.push(fields.active); }
+    if (sets.length === 0) return;
+    sets.push('updated_at = ?');
+    values.push(updatedAt);
+    values.push(id);
+    this.db.prepare(`UPDATE webhook_registrations SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  listWebhooksByEventType(eventType: string): WebhookRegistrationRow[] {
+    return this.db
+      .prepare('SELECT * FROM webhook_registrations WHERE event_type = ? AND active = 1')
+      .all(eventType) as WebhookRegistrationRow[];
+  }
+
+  listAllWebhooks(): WebhookRegistrationRow[] {
+    return this.db
+      .prepare('SELECT * FROM webhook_registrations ORDER BY created_at DESC')
+      .all() as WebhookRegistrationRow[];
+  }
+
+  // ── Webhook deliveries ─────────────────────────────────────────────────
+
+  insertWebhookDelivery(row: Omit<WebhookDeliveryRow, 'id'>): number {
+    const info = this.db
+      .prepare(
+        `INSERT INTO webhook_deliveries
+           (webhook_id, event_id, status, attempt_count, last_attempt_at,
+            next_attempt_at, response_status, error_message, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.webhook_id,
+        row.event_id,
+        row.status,
+        row.attempt_count,
+        row.last_attempt_at,
+        row.next_attempt_at,
+        row.response_status,
+        row.error_message,
+        row.created_at,
+      );
+    return Number(info.lastInsertRowid);
+  }
+
+  getPendingDeliveries(now: number, limit = 50): WebhookDeliveryRow[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM webhook_deliveries
+         WHERE status IN ('pending','failed') AND next_attempt_at <= ?
+         ORDER BY next_attempt_at ASC LIMIT ?`,
+      )
+      .all(now, limit) as WebhookDeliveryRow[];
+  }
+
+  updateDelivery(
+    id: number,
+    fields: Partial<
+      Pick<
+        WebhookDeliveryRow,
+        'status' | 'attempt_count' | 'last_attempt_at' | 'next_attempt_at' | 'response_status' | 'error_message'
+      >
+    >,
+  ): void {
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
+    if (fields.attempt_count !== undefined) { sets.push('attempt_count = ?'); values.push(fields.attempt_count); }
+    if (fields.last_attempt_at !== undefined) { sets.push('last_attempt_at = ?'); values.push(fields.last_attempt_at); }
+    if (fields.next_attempt_at !== undefined) { sets.push('next_attempt_at = ?'); values.push(fields.next_attempt_at); }
+    if (fields.response_status !== undefined) { sets.push('response_status = ?'); values.push(fields.response_status); }
+    if (fields.error_message !== undefined) { sets.push('error_message = ?'); values.push(fields.error_message); }
+    if (sets.length === 0) return;
+    values.push(id);
+    this.db.prepare(`UPDATE webhook_deliveries SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  countPendingDeliveries(): number {
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM webhook_deliveries WHERE status IN ('pending','failed')`)
+      .get() as { n: number };
+    return row.n;
   }
 }

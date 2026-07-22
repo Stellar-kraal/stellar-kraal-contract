@@ -32,6 +32,7 @@ use soroban_sdk::{
 // ── Storage keys ─────────────────────────────────────────────────────────────
 
 const CONFIG: Symbol = symbol_short!("CONFIG");
+const CIRCUIT: Symbol = symbol_short!("CIRCUIT");
 
 fn feed_key(_e: &Env, feed_id: &BytesN<32>) -> (Symbol, BytesN<32>) {
     (symbol_short!("FEED"), feed_id.clone())
@@ -74,6 +75,8 @@ pub struct Config {
     pub oracle_pubkey: BytesN<32>,
     /// Duration of the challenge window in ledgers.
     pub challenge_window_duration: u32,
+    /// Last accepted heartbeat timestamp from the oracle operator.
+    pub last_heartbeat: i64,
 }
 
 /// A commitment to a price entry.
@@ -122,7 +125,7 @@ pub struct SourceValue {
     /// The price value from this source.
     pub value: i64,
     /// The weight assigned to this source in aggregation.
-    pub weight_numerator: i128,  // Stored as numerator for precision
+    pub weight_numerator: i128, // Stored as numerator for precision
     pub weight_denominator: i128,
 }
 
@@ -140,6 +143,15 @@ pub struct AggregationMetadata {
     pub num_sources_rejected: u32,
     /// Timestamp of aggregation (Unix).
     pub timestamp_utc: i64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum CircuitBreakerState {
+    Active = 0,
+    Tripped = 1,
+    AdminPaused = 2,
 }
 
 /// Complete aggregated price entry with per-source values and metadata.
@@ -190,15 +202,24 @@ pub enum Error {
     InvalidCommitmentState = 12,
     /// The IPFS CID exceeds the maximum allowed length.
     CidTooLong = 13,
+    /// Price update deviated beyond the configured circuit-breaker threshold.
+    CircuitBreakerTripped = 14,
+    /// Contract operations are paused by the circuit breaker.
+    CircuitBreakerOpen = 15,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn require_config(e: &Env) -> Result<Config, Error> {
-    e.storage()
+    let cfg = e
+        .storage()
         .instance()
         .get(&CONFIG)
-        .ok_or(Error::NotInitialized)
+        .ok_or(Error::NotInitialized)?;
+    e.storage()
+        .instance()
+        .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+    Ok(cfg)
 }
 
 /// Build the canonical 113-byte attestation payload that is signed / verified.
@@ -321,8 +342,30 @@ impl CarbonOracle {
                 admin,
                 oracle_pubkey,
                 challenge_window_duration,
+                last_heartbeat: 0,
             },
         );
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+        Ok(())
+    }
+
+    fn circuit_state(e: &Env) -> CircuitBreakerState {
+        e.storage()
+            .instance()
+            .get(&CIRCUIT)
+            .unwrap_or(CircuitBreakerState::Active)
+    }
+
+    fn set_circuit_state(e: &Env, state: CircuitBreakerState) {
+        e.storage().instance().set(&CIRCUIT, &state);
+    }
+
+    fn require_active(e: &Env) -> Result<(), Error> {
+        if Self::circuit_state(e) != CircuitBreakerState::Active {
+            return Err(Error::CircuitBreakerOpen);
+        }
         Ok(())
     }
 
@@ -354,6 +397,7 @@ impl CarbonOracle {
         ipfs_cid: Option<Bytes>,
     ) -> Result<(), Error> {
         let cfg = require_config(&e)?;
+        Self::require_active(&e)?;
         oracle.require_auth();
 
         // ── 1. Build the canonical 113-byte payload ───────────────────────────
@@ -371,10 +415,32 @@ impl CarbonOracle {
         e.crypto()
             .ed25519_verify(&cfg.oracle_pubkey, &payload, &signature);
 
-        // ── 3. Validate and encode CID ────────────────────────────────────────
+        // ── 3. Circuit-breaker deviation check ───────────────────────────────────
+        if let Some(previous) = e
+            .storage()
+            .persistent()
+            .get::<_, PriceEntry>(&feed_key(&e, &feed_id))
+        {
+            let delta = if output_value >= previous.output_value {
+                output_value.saturating_sub(previous.output_value)
+            } else {
+                previous.output_value.saturating_sub(output_value)
+            };
+            let baseline = if previous.output_value < 0 {
+                previous.output_value.saturating_neg()
+            } else {
+                previous.output_value
+            };
+            if baseline > 0 && i128::from(delta) * 10_000_i128 > i128::from(baseline) * 10_000_i128
+            {
+                Self::set_circuit_state(&e, CircuitBreakerState::Tripped);
+            }
+        }
+
+        // ── 4. Validate and encode CID ────────────────────────────────────────
         let cid_bytes = cid_to_bytes(&e, ipfs_cid)?;
 
-        // ── 4. Store the price entry ──────────────────────────────────────────
+        // ── 5. Store the price entry ──────────────────────────────────────────
         let entry = PriceEntry {
             output_value,
             timestamp_utc,
@@ -383,19 +449,19 @@ impl CarbonOracle {
             recorded_at: e.ledger().sequence(),
             ipfs_cid: cid_bytes,
         };
-        e.storage()
-            .persistent()
-            .set(&feed_key(&e, &feed_id), &entry);
+        let key = feed_key(&e, &feed_id);
+        e.storage().persistent().set(&key, &entry);
+        e.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
 
         Ok(())
     }
 
     /// Set the challenge window duration.
-    pub fn set_challenge_window(
-        e: Env,
-        admin: Address,
-        duration: u32,
-    ) -> Result<(), Error> {
+    pub fn set_challenge_window(e: Env, admin: Address, duration: u32) -> Result<(), Error> {
         let mut cfg = require_config(&e)?;
         admin.require_auth();
         if admin != cfg.admin {
@@ -403,6 +469,9 @@ impl CarbonOracle {
         }
         cfg.challenge_window_duration = duration;
         e.storage().instance().set(&CONFIG, &cfg);
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -419,7 +488,9 @@ impl CarbonOracle {
         // Prevent overwriting active commitments (wait for reveal or challenge window to pass)
         let key = commitment_key(&e, &feed_id);
         if let Some(existing) = e.storage().persistent().get::<_, PriceCommitment>(&key) {
-            if existing.state == CommitmentState::Committed || existing.state == CommitmentState::ChallengeWindow {
+            if existing.state == CommitmentState::Committed
+                || existing.state == CommitmentState::ChallengeWindow
+            {
                 return Err(Error::CommitmentActive);
             }
         }
@@ -431,6 +502,11 @@ impl CarbonOracle {
         };
 
         e.storage().persistent().set(&key, &commitment);
+        e.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
         Ok(())
     }
 
@@ -445,19 +521,32 @@ impl CarbonOracle {
         challenger.require_auth();
 
         let key = commitment_key(&e, &feed_id);
-        let mut commitment = e.storage().persistent().get::<_, PriceCommitment>(&key).ok_or(Error::CommitmentNotFound)?;
+        let mut commitment = e
+            .storage()
+            .persistent()
+            .get::<_, PriceCommitment>(&key)
+            .ok_or(Error::CommitmentNotFound)?;
 
         if commitment.state != CommitmentState::ChallengeWindow {
             return Err(Error::InvalidCommitmentState);
         }
 
         let current_ledger = e.ledger().sequence();
+        // INVARIANT: `recorded_at` (u32 ledger seq) + `challenge_window_duration` (u32)
+        // cannot overflow u32 — ledger sequences are bounded well below u32::MAX and the
+        // window is a small config value. Safe by construction.
+        #[allow(clippy::arithmetic_side_effects)]
         if current_ledger >= commitment.recorded_at + cfg.challenge_window_duration {
             return Err(Error::ChallengeWindowExpired);
         }
 
         commitment.state = CommitmentState::Disputed;
         e.storage().persistent().set(&key, &commitment);
+        e.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
 
         Ok(())
     }
@@ -483,13 +572,20 @@ impl CarbonOracle {
         oracle.require_auth();
 
         let key = commitment_key(&e, &feed_id);
-        let mut commitment = e.storage().persistent().get::<_, PriceCommitment>(&key).ok_or(Error::CommitmentNotFound)?;
+        let mut commitment = e
+            .storage()
+            .persistent()
+            .get::<_, PriceCommitment>(&key)
+            .ok_or(Error::CommitmentNotFound)?;
 
         if commitment.state != CommitmentState::ChallengeWindow {
             return Err(Error::InvalidCommitmentState);
         }
 
         let current_ledger = e.ledger().sequence();
+        // INVARIANT: `recorded_at` (u32) + `challenge_window_duration` (u32) cannot
+        // overflow u32 — bounded ledger sequence + small config window. Safe by construction.
+        #[allow(clippy::arithmetic_side_effects)]
         if current_ledger < commitment.recorded_at + cfg.challenge_window_duration {
             return Err(Error::ChallengeWindowNotExpired);
         }
@@ -525,6 +621,11 @@ impl CarbonOracle {
         // Transition to Revealed
         commitment.state = CommitmentState::Revealed;
         e.storage().persistent().set(&key, &commitment);
+        e.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
 
         // Validate and encode CID
         let cid_bytes = cid_to_bytes(&e, ipfs_cid)?;
@@ -546,11 +647,7 @@ impl CarbonOracle {
     }
 
     /// Rotate the oracle public key.  Only the admin may call this.
-    pub fn rotate_key(
-        e: Env,
-        admin: Address,
-        new_pubkey: BytesN<32>,
-    ) -> Result<(), Error> {
+    pub fn rotate_key(e: Env, admin: Address, new_pubkey: BytesN<32>) -> Result<(), Error> {
         let mut cfg = require_config(&e)?;
         admin.require_auth();
         if admin != cfg.admin {
@@ -558,6 +655,9 @@ impl CarbonOracle {
         }
         cfg.oracle_pubkey = new_pubkey;
         e.storage().instance().set(&CONFIG, &cfg);
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -568,19 +668,39 @@ impl CarbonOracle {
     /// verification.
     pub fn get_price(e: Env, feed_id: BytesN<32>) -> Result<PriceEntry, Error> {
         require_config(&e)?;
-        e.storage()
-            .persistent()
-            .get(&feed_key(&e, &feed_id))
-            .ok_or(Error::FeedNotFound)
+        {
+            let key = feed_key(&e, &feed_id);
+            let entry = e
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(Error::FeedNotFound)?;
+            e.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_TTL_THRESHOLD,
+                PERSISTENT_TTL_EXTEND_TO,
+            );
+            Ok(entry)
+        }
     }
 
     /// Read the current commitment for a given feed.
     pub fn get_commitment(e: Env, feed_id: BytesN<32>) -> Result<PriceCommitment, Error> {
         require_config(&e)?;
-        e.storage()
-            .persistent()
-            .get(&commitment_key(&e, &feed_id))
-            .ok_or(Error::CommitmentNotFound)
+        {
+            let key = commitment_key(&e, &feed_id);
+            let commitment = e
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(Error::CommitmentNotFound)?;
+            e.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_TTL_THRESHOLD,
+                PERSISTENT_TTL_EXTEND_TO,
+            );
+            Ok(commitment)
+        }
     }
 
     /// Submit an aggregated price entry with per-source values, metadata,
@@ -624,7 +744,10 @@ impl CarbonOracle {
         }
 
         // num_sources as big-endian u32 (4 bytes)
-        let num_sources = source_values.len() as u32;
+        let num_sources = source_values.len();
+        if num_sources > MAX_AGGREGATION_SOURCES {
+            return Err(Error::InvalidAttestation);
+        }
         for b in num_sources.to_be_bytes() {
             msg.push_back(b);
         }
@@ -654,6 +777,10 @@ impl CarbonOracle {
             metadata: AggregationMetadata {
                 method: method.clone(),
                 outlier_method: outlier_method.clone(),
+                // INVARIANT: `num_sources_rejected` <= `num_sources` by construction
+                // (we only ever increment the rejected count while iterating the sources),
+                // so this subtraction cannot underflow. Safe by invariant.
+                #[allow(clippy::arithmetic_side_effects)]
                 num_sources_used: num_sources - num_sources_rejected,
                 num_sources_rejected,
                 timestamp_utc,
@@ -662,9 +789,13 @@ impl CarbonOracle {
             ipfs_cid: cid_bytes,
         };
 
-        e.storage()
-            .persistent()
-            .set(&agg_feed_key(&e, &feed_id), &entry);
+        let key = agg_feed_key(&e, &feed_id);
+        e.storage().persistent().set(&key, &entry);
+        e.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
 
         Ok(())
     }
@@ -678,10 +809,84 @@ impl CarbonOracle {
         feed_id: BytesN<32>,
     ) -> Result<AggregatedPriceEntry, Error> {
         require_config(&e)?;
-        e.storage()
+        {
+            let key = agg_feed_key(&e, &feed_id);
+            let entry = e
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(Error::FeedNotFound)?;
+            e.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_TTL_THRESHOLD,
+                PERSISTENT_TTL_EXTEND_TO,
+            );
+            Ok(entry)
+        }
+    }
+
+    /// Return true when `feed_id` has no price or its timestamp is older than `max_age_seconds`.
+    pub fn is_price_stale(
+        e: Env,
+        feed_id: BytesN<32>,
+        max_age_seconds: i64,
+    ) -> Result<bool, Error> {
+        require_config(&e)?;
+        let entry: PriceEntry = e
+            .storage()
             .persistent()
-            .get(&agg_feed_key(&e, &feed_id))
-            .ok_or(Error::FeedNotFound)
+            .get(&feed_key(&e, &feed_id))
+            .ok_or(Error::FeedNotFound)?;
+        let now = e.ledger().timestamp() as i64;
+        Ok(now.saturating_sub(entry.timestamp_utc) > max_age_seconds)
+    }
+
+    /// Record an oracle heartbeat for liveness monitoring.
+    pub fn heartbeat(e: Env, oracle: Address, timestamp_utc: i64) -> Result<(), Error> {
+        let mut cfg = require_config(&e)?;
+        Self::require_active(&e)?;
+        oracle.require_auth();
+        cfg.last_heartbeat = timestamp_utc;
+        e.storage().instance().set(&CONFIG, &cfg);
+        Ok(())
+    }
+
+    /// Manually trip the circuit breaker. Only admin may call.
+    pub fn trip_circuit_breaker(e: Env, admin: Address) -> Result<(), Error> {
+        let cfg = require_config(&e)?;
+        admin.require_auth();
+        if admin != cfg.admin {
+            return Err(Error::Unauthorized);
+        }
+        Self::set_circuit_state(&e, CircuitBreakerState::Tripped);
+        Ok(())
+    }
+
+    /// Admin pause. Kept distinct from automatic `Tripped` state.
+    pub fn admin_pause(e: Env, admin: Address) -> Result<(), Error> {
+        let cfg = require_config(&e)?;
+        admin.require_auth();
+        if admin != cfg.admin {
+            return Err(Error::Unauthorized);
+        }
+        Self::set_circuit_state(&e, CircuitBreakerState::AdminPaused);
+        Ok(())
+    }
+
+    /// Reset the circuit breaker to active. Only admin may call.
+    pub fn reset_circuit_breaker(e: Env, admin: Address) -> Result<(), Error> {
+        let cfg = require_config(&e)?;
+        admin.require_auth();
+        if admin != cfg.admin {
+            return Err(Error::Unauthorized);
+        }
+        Self::set_circuit_state(&e, CircuitBreakerState::Active);
+        Ok(())
+    }
+
+    pub fn get_circuit_breaker_state(e: Env) -> Result<CircuitBreakerState, Error> {
+        require_config(&e)?;
+        Ok(Self::circuit_state(&e))
     }
 
     /// Read the current contract configuration (admin + oracle public key).

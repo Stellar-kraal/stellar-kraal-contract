@@ -19,12 +19,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from dataclasses import dataclass, asdict
 from typing import Any, Protocol
 
 
 from oracle_bridge.attestation import OracleSigner, SignedAttestation, sha256
+logger = logging.getLogger(__name__)
+
 from oracle_bridge.aggregation import (
     AggregationConfig,
     AggregationResult,
@@ -219,6 +222,27 @@ class OracleBridge:
         self._ipfs = ipfs_client if ipfs_client is not None else get_ipfs_client()
         self._aggregation_config = aggregation_config
 
+    def _submit_with_circuit_breaker_alert(
+        self, attestation: SignedAttestation
+    ) -> str:
+        """Submit a price, logging an error if the circuit breaker trips."""
+        try:
+            return self._client.submit_price(attestation)
+        except Exception as exc:
+            message = str(exc)
+            if "CircuitBreaker" in message or "#13" in message or "#14" in message or "#15" in message:
+                logger.error(
+                    "oracle_circuit_breaker_tripped",
+                    extra={
+                        "event": "oracle_circuit_breaker_tripped",
+                        "feed_id": attestation.payload.feed_id.hex(),
+                        "timestamp_utc": attestation.payload.timestamp_utc,
+                        "output_value": attestation.payload.output_value,
+                        "reason": message,
+                    },
+                )
+            raise
+
     def process(
         self, result: GEEResult
     ) -> tuple[SignedAttestation, str, ProvenanceRecord]:
@@ -280,7 +304,7 @@ class OracleBridge:
         try:
             return self._client.submit_price_with_cid(attestation, ipfs_cid)
         except AttributeError:
-            return self._client.submit_price(attestation)
+            return self._submit_with_circuit_breaker_alert(attestation)
 
     def commit(self, result: GEEResult) -> tuple[bytes, str]:
         """
