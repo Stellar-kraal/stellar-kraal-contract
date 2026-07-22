@@ -18,7 +18,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "d6d07891c6169a005a4a1971eb9921576767623bee4d8d683d76235e3a3804e8"
+                  "bytes": "f6c21544fca51b62dda779efe639218917b333d914a13b56ba62a350d4a65780"
                 },
                 {
                   "u32": 10
@@ -58,8 +58,9 @@
                   "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "bytes": "46d0878a02c3d96314eaa86543cfe8673305431f1ccdd8848d72fe50190393368a3143f22a703a044ba4ec2c6cacedb95fe6c3f57e9021a414c1959440d93e0b"
-                }
+                  "bytes": "9983e3caad7389b0ae1cc8d8b2846c9491ed34735f83523b182eb86142f4a0ec3cc36fbf2cac763dc569628fce0ef35c29b95d97097924d5046aba545878e40c"
+                },
+                "void"
               ]
             }
           },
@@ -122,6 +123,14 @@
                       },
                       "val": {
                         "bytes": "beef000000000000000000000000000000000000000000000000000000000000"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "ipfs_cid"
+                      },
+                      "val": {
+                        "bytes": ""
                       }
                     },
                     {
@@ -212,18 +221,10 @@
                             },
                             {
                               "key": {
-                                "symbol": "last_heartbeat"
-                              },
-                              "val": {
-                                "i64": 0
-                              }
-                            },
-                            {
-                              "key": {
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "d6d07891c6169a005a4a1971eb9921576767623bee4d8d683d76235e3a3804e8"
+                                "bytes": "f6c21544fca51b62dda779efe639218917b333d914a13b56ba62a350d4a65780"
                               }
                             }
                           ]

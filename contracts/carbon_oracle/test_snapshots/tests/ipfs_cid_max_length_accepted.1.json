@@ -18,7 +18,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "759c8fa76770712a401f6704f5b10de862cbfafd8c748e651db931441100b9cf"
+                  "bytes": "99033e1bd2bb4cf239f0bbf64d6eaaab806f47683cb9f3cca2fae914f802d3d3"
                 },
                 {
                   "u32": 10
@@ -37,40 +37,10 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "commit_price",
+              "function_name": "submit_price",
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                },
-                {
-                  "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
-                },
-                {
-                  "bytes": "521e3363ab932f849131eb6790394092e1c329032878c2698a4c8f789cb13012"
-                }
-              ]
-            }
-          },
-          "sub_invocations": []
-        }
-      ]
-    ],
-    [],
-    [],
-    [
-      [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-        {
-          "function": {
-            "contract_fn": {
-              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "reveal_price",
-              "args": [
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                },
-                {
-                  "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
                 },
                 {
                   "bytes": "dead000000000000000000000000000000000000000000000000000000000000"
@@ -79,19 +49,19 @@
                   "bytes": "beef000000000000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "i64": 555555
+                  "i64": 2000
                 },
                 {
-                  "i64": 1800000000
+                  "i64": 1720000000
                 },
                 {
-                  "bytes": "7777777777777777777777777777777777777777777777777777777777777777"
+                  "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "bytes": "527a12581cb0ed07d80c57bfed835595b3c2c4563d36d8338018adadd704f17c4f678beb78e3ad34cb34c95fd8e953709fa1d9060cd71eb1defa82303c85b308"
+                  "bytes": "d01b2b7a127cc92d3a2f86c98b99dad0cbfea237612db54b38f0d0534c562718a5ef65b65b9031d84ad48bbe7e8f88f695f92ee87f74175c090c4f69b053df01"
                 },
                 {
-                  "bytes": "6261666b726569686477646365666768313233343536373839303132333435363738393061626364"
+                  "bytes": "62626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262"
                 }
               ]
             }
@@ -100,12 +70,11 @@
         }
       ]
     ],
-    [],
     []
   ],
   "ledger": {
     "protocol_version": 22,
-    "sequence_number": 11,
+    "sequence_number": 0,
     "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
@@ -113,80 +82,6 @@
     "min_temp_entry_ttl": 16,
     "max_entry_ttl": 6312000,
     "ledger_entries": [
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "COMMIT"
-                },
-                {
-                  "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "COMMIT"
-                    },
-                    {
-                      "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "commitment_hash"
-                      },
-                      "val": {
-                        "bytes": "521e3363ab932f849131eb6790394092e1c329032878c2698a4c8f789cb13012"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "recorded_at"
-                      },
-                      "val": {
-                        "u32": 0
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "state"
-                      },
-                      "val": {
-                        "vec": [
-                          {
-                            "symbol": "Revealed"
-                          }
-                        ]
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          4095
-        ]
-      ],
       [
         {
           "contract_data": {
@@ -237,7 +132,7 @@
                         "symbol": "ipfs_cid"
                       },
                       "val": {
-                        "bytes": "6261666b726569686477646365666768313233343536373839303132333435363738393061626364"
+                        "bytes": "62626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262"
                       }
                     },
                     {
@@ -245,7 +140,7 @@
                         "symbol": "output_value"
                       },
                       "val": {
-                        "i64": 555555
+                        "i64": 2000
                       }
                     },
                     {
@@ -253,7 +148,7 @@
                         "symbol": "recorded_at"
                       },
                       "val": {
-                        "u32": 11
+                        "u32": 0
                       }
                     },
                     {
@@ -269,7 +164,7 @@
                         "symbol": "timestamp_utc"
                       },
                       "val": {
-                        "i64": 1800000000
+                        "i64": 1720000000
                       }
                     }
                   ]
@@ -278,7 +173,7 @@
             },
             "ext": "v0"
           },
-          4106
+          4095
         ]
       ],
       [
@@ -331,7 +226,7 @@
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "759c8fa76770712a401f6704f5b10de862cbfafd8c748e651db931441100b9cf"
+                                "bytes": "99033e1bd2bb4cf239f0bbf64d6eaaab806f47683cb9f3cca2fae914f802d3d3"
                               }
                             }
                           ]
@@ -378,39 +273,6 @@
             "ext": "v0"
           },
           6311999
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-            "key": {
-              "ledger_key_nonce": {
-                "nonce": 4837995959683129791
-              }
-            },
-            "durability": "temporary"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-                "key": {
-                  "ledger_key_nonce": {
-                    "nonce": 4837995959683129791
-                  }
-                },
-                "durability": "temporary",
-                "val": "void"
-              }
-            },
-            "ext": "v0"
-          },
-          6312010
         ]
       ],
       [

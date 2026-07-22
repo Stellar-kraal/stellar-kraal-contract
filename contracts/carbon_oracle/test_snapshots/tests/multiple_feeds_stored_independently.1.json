@@ -18,7 +18,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "f6b1f42be58c33bfb77e691ca16ae576a697dcf9c02c3a1f88b9364619a161a0"
+                  "bytes": "5513507e961fee23a037391564d77a887b01751a3507cd9d40474ef12602b20b"
                 },
                 {
                   "u32": 10
@@ -58,8 +58,9 @@
                   "bytes": "aa00000000000000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "bytes": "4462d79e2e1e38062c113d6488691bb7a4bc5eb1c8246ec02df0006e2be24191f2be9beb5a60c77ebc4c335797066bcd22bfedaaabd32af184b7e7e41ca69e00"
-                }
+                  "bytes": "0f59d3c821f1a6a150cc81c81e4eb3924ca1b50fc13edc1d07e723738c5c4912df2c219d3ae9186fbb366e609cfc06829f4a88bcb02d7b3f5f3764aad5b7600d"
+                },
+                "void"
               ]
             }
           },
@@ -95,8 +96,9 @@
                   "bytes": "bb00000000000000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "bytes": "4260532c8b0cd3c343dd831a31739c5b82a1856cbc2f68db70b3957c922717f825d1f3e3ded269ba10cc2d5e0114f085c7a2f043135d3e64f361c6cc5533790a"
-                }
+                  "bytes": "15591519e499cd89c21b09af1b476a0d88505e5cbd36eed9317852e1ccd4c34014a3dcbdec1589126e6cd62690f84a6f4a2babdcb3ae63d57329e90efcf2dc0a"
+                },
+                "void"
               ]
             }
           },
@@ -160,6 +162,14 @@
                       },
                       "val": {
                         "bytes": "beef000000000000000000000000000000000000000000000000000000000000"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "ipfs_cid"
+                      },
+                      "val": {
+                        "bytes": ""
                       }
                     },
                     {
@@ -250,6 +260,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "ipfs_cid"
+                      },
+                      "val": {
+                        "bytes": ""
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "output_value"
                       },
                       "val": {
@@ -336,18 +354,10 @@
                             },
                             {
                               "key": {
-                                "symbol": "last_heartbeat"
-                              },
-                              "val": {
-                                "i64": 0
-                              }
-                            },
-                            {
-                              "key": {
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "f6b1f42be58c33bfb77e691ca16ae576a697dcf9c02c3a1f88b9364619a161a0"
+                                "bytes": "5513507e961fee23a037391564d77a887b01751a3507cd9d40474ef12602b20b"
                               }
                             }
                           ]

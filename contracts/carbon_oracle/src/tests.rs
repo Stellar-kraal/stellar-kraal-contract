@@ -14,6 +14,8 @@
 //! - Key rotation by admin succeeds; old key no longer works.
 //! - Key rotation by non-admin is rejected.
 //! - `get_price` on unknown feed returns `FeedNotFound`.
+//! - IPFS CID stored and retrieved from PriceEntry.
+//! - IPFS CID too long rejected with CidTooLong.
 
 #![cfg(test)]
 
@@ -21,10 +23,7 @@ extern crate std;
 
 use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
-use soroban_sdk::{
-    testutils::{Address as _, Ledger},
-    Address, BytesN, Env,
-};
+use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, Bytes, BytesN, Env};
 
 use crate::{CarbonOracle, CarbonOracleClient, CommitmentState, Error, SCHEMA_VERSION};
 
@@ -63,6 +62,11 @@ fn n32(e: &Env, b: &[u8; 32]) -> BytesN<32> {
 }
 fn n64(e: &Env, b: &[u8; 64]) -> BytesN<64> {
     BytesN::from_array(e, b)
+}
+
+/// Make a Bytes from a string slice (for CID tests).
+fn cid_bytes(e: &Env, s: &str) -> Bytes {
+    Bytes::from_slice(e, s.as_bytes())
 }
 
 // ── Fixture ───────────────────────────────────────────────────────────────────
@@ -125,6 +129,7 @@ impl Fixture {
         input_params_hash: Option<[u8; 32]>,
         feed_id: Option<[u8; 32]>,
         key_override: Option<&SigningKey>,
+        ipfs_cid: Option<&str>,
     ) {
         let sh = script_hash.unwrap_or(self.script_hash);
         let iph = input_params_hash.unwrap_or(self.input_params_hash);
@@ -132,6 +137,7 @@ impl Fixture {
         let payload = build_payload_bytes(&sh, &iph, output_value, timestamp_utc, &fid);
         let signer = key_override.unwrap_or(&self.signing_key);
         let raw_sig = sign_payload(signer, &payload);
+        let cid = ipfs_cid.map(|s| cid_bytes(&self.env, s));
         self.client.submit_price(
             &self.oracle,
             &n32(&self.env, &sh),
@@ -140,6 +146,7 @@ impl Fixture {
             &timestamp_utc,
             &n32(&self.env, &fid),
             &n64(&self.env, &raw_sig),
+            &cid,
         );
     }
 
@@ -163,6 +170,7 @@ impl Fixture {
                 &timestamp_utc,
                 &n32(&self.env, &feed_id),
                 &n64(&self.env, &sig),
+                &None,
             )
             .is_err()
     }
@@ -173,26 +181,28 @@ impl Fixture {
 #[test]
 fn valid_attestation_is_accepted() {
     let f = Fixture::new();
-    f.submit_ok(1_234_567, 1_720_051_200, None, None, None, None);
+    f.submit_ok(1_234_567, 1_720_051_200, None, None, None, None, None);
 }
 
 #[test]
 fn price_entry_stored_correctly() {
     let f = Fixture::new();
-    f.submit_ok(9_999_999, 1_720_000_000, None, None, None, None);
+    f.submit_ok(9_999_999, 1_720_000_000, None, None, None, None, None);
 
     let entry = f.client.get_price(&n32(&f.env, &f.feed_id));
     assert_eq!(entry.output_value, 9_999_999);
     assert_eq!(entry.timestamp_utc, 1_720_000_000);
     assert_eq!(entry.script_hash, n32(&f.env, &f.script_hash));
     assert_eq!(entry.input_params_hash, n32(&f.env, &f.input_params_hash));
+    // No CID supplied → empty
+    assert_eq!(entry.ipfs_cid.len(), 0);
 }
 
 #[test]
 fn subsequent_updates_overwrite_previous() {
     let f = Fixture::new();
-    f.submit_ok(100, 1_720_000_000, None, None, None, None);
-    f.submit_ok(200, 1_720_003_600, None, None, None, None);
+    f.submit_ok(100, 1_720_000_000, None, None, None, None, None);
+    f.submit_ok(200, 1_720_003_600, None, None, None, None, None);
     let entry = f.client.get_price(&n32(&f.env, &f.feed_id));
     assert_eq!(entry.output_value, 200);
 }
@@ -200,9 +210,70 @@ fn subsequent_updates_overwrite_previous() {
 #[test]
 fn negative_output_value_accepted() {
     let f = Fixture::new();
-    f.submit_ok(-42, 1_720_000_000, None, None, None, None);
+    f.submit_ok(-42, 1_720_000_000, None, None, None, None, None);
     let entry = f.client.get_price(&n32(&f.env, &f.feed_id));
     assert_eq!(entry.output_value, -42);
+}
+
+// ── IPFS CID tests ────────────────────────────────────────────────────────────
+
+#[test]
+fn ipfs_cid_stored_and_retrieved() {
+    let f = Fixture::new();
+    let cid = "bafkreiabcdef1234567890abcdef1234567890ab";
+    f.submit_ok(42_000, 1_720_000_000, None, None, None, None, Some(cid));
+
+    let entry = f.client.get_price(&n32(&f.env, &f.feed_id));
+    assert_eq!(entry.output_value, 42_000);
+
+    // CID bytes should match what was stored
+    let expected = cid_bytes(&f.env, cid);
+    assert_eq!(entry.ipfs_cid, expected);
+}
+
+#[test]
+fn ipfs_cid_empty_when_not_provided() {
+    let f = Fixture::new();
+    f.submit_ok(1_000, 1_720_000_000, None, None, None, None, None);
+
+    let entry = f.client.get_price(&n32(&f.env, &f.feed_id));
+    assert_eq!(entry.ipfs_cid.len(), 0, "CID should be empty when not provided");
+}
+
+#[test]
+fn ipfs_cid_too_long_rejected() {
+    let f = Fixture::new();
+    // Build a 65-byte CID (exceeds MAX_CID_LEN=64)
+    let long_cid: std::string::String = "b".repeat(65);
+    let sh = f.script_hash;
+    let iph = f.input_params_hash;
+    let fid = f.feed_id;
+    let output_value: i64 = 1_000;
+    let timestamp_utc: i64 = 1_720_000_000;
+    let payload = build_payload_bytes(&sh, &iph, output_value, timestamp_utc, &fid);
+    let sig = sign_payload(&f.signing_key, &payload);
+
+    let result = f.client.try_submit_price(
+        &f.oracle,
+        &n32(&f.env, &sh),
+        &n32(&f.env, &iph),
+        &output_value,
+        &timestamp_utc,
+        &n32(&f.env, &fid),
+        &n64(&f.env, &sig),
+        &Some(cid_bytes(&f.env, &long_cid)),
+    );
+    assert_eq!(result, Err(Ok(Error::CidTooLong)));
+}
+
+#[test]
+fn ipfs_cid_max_length_accepted() {
+    let f = Fixture::new();
+    // Build a 64-byte CID (exactly MAX_CID_LEN)
+    let max_cid: std::string::String = "b".repeat(64);
+    f.submit_ok(2_000, 1_720_000_000, None, None, None, None, Some(&max_cid));
+    let entry = f.client.get_price(&n32(&f.env, &f.feed_id));
+    assert_eq!(entry.ipfs_cid.len(), 64);
 }
 
 // ── Tamper-detection helpers ──────────────────────────────────────────────────
@@ -241,24 +312,15 @@ fn assert_tampered_payload_rejected(idx: usize) {
 
 #[test]
 fn tampered_schema_version_rejected() {
-    // The schema_version byte is embedded by the CONTRACT at position 0 of the
-    // canonical payload (always SCHEMA_VERSION = 1).  An attacker cannot
-    // override it through the function arguments — it is a compile-time
-    // constant in the contract.
-    //
-    // This test verifies the corollary: a signature produced with a DIFFERENT
-    // schema_version byte (simulating a future version or an attacker trying
-    // to reuse a v2 signature) is rejected, because the contract always
-    // rebuilds the message with SCHEMA_VERSION.
     let f = Fixture::new();
     let ov: i64 = 1_234_567;
     let ts: i64 = 1_720_051_200;
 
     // Build payload with a WRONG schema_version byte (e.g., 0xFF).
-    let mut payload = build_payload_bytes(&f.script_hash, &f.input_params_hash, ov, ts, &f.feed_id);
+    let mut payload =
+        build_payload_bytes(&f.script_hash, &f.input_params_hash, ov, ts, &f.feed_id);
     payload[0] = 0xFF; // wrong schema version
 
-    // Sign the tampered (wrong-version) payload.
     let sig = sign_payload(&f.signing_key, &payload);
 
     // The contract will rebuild the message with SCHEMA_VERSION=1 and verify
@@ -359,6 +421,7 @@ fn uninitialized_contract_rejects_submit() {
         &0i64,
         &BytesN::from_array(&env, &fid),
         &BytesN::from_array(&env, &sig),
+        &None,
     );
     assert_eq!(result, Err(Ok(Error::NotInitialized)));
 }
@@ -374,7 +437,7 @@ fn key_rotation_by_admin_succeeds() {
         .rotate_key(&f.admin, &n32(&f.env, &new_pubkey_bytes));
 
     // New key must now be accepted.
-    f.submit_ok(42, 1_720_000_000, None, None, None, Some(&new_key));
+    f.submit_ok(42, 1_720_000_000, None, None, None, Some(&new_key), None);
 }
 
 #[test]
@@ -427,8 +490,8 @@ fn multiple_feeds_stored_independently() {
     let mut feed_b = [0u8; 32];
     feed_b[0] = 0xBB;
 
-    f.submit_ok(111, 1_720_000_000, None, None, Some(feed_a), None);
-    f.submit_ok(222, 1_720_003_600, None, None, Some(feed_b), None);
+    f.submit_ok(111, 1_720_000_000, None, None, Some(feed_a), None, None);
+    f.submit_ok(222, 1_720_003_600, None, None, Some(feed_b), None, None);
 
     let entry_a = f.client.get_price(&n32(&f.env, &feed_a));
     let entry_b = f.client.get_price(&n32(&f.env, &feed_b));
@@ -487,11 +550,13 @@ fn commit_and_reveal_success() {
         &timestamp_utc,
         &n32(&f.env, &salt),
         &n64(&f.env, &sig),
+        &None,
     );
     assert_eq!(early_reveal, Err(Ok(Error::ChallengeWindowNotExpired)));
 
     f.env.ledger().set_sequence_number(current_seq + 11);
 
+    let cid = "bafkreihdwdcefgh12345678901234567890abcd";
     f.client.reveal_price(
         &f.oracle,
         &n32(&f.env, &f.feed_id),
@@ -501,6 +566,7 @@ fn commit_and_reveal_success() {
         &timestamp_utc,
         &n32(&f.env, &salt),
         &n64(&f.env, &sig),
+        &Some(cid_bytes(&f.env, cid)),
     );
 
     let revealed_commitment = f.client.get_commitment(&n32(&f.env, &f.feed_id));
@@ -508,6 +574,8 @@ fn commit_and_reveal_success() {
 
     let price = f.client.get_price(&n32(&f.env, &f.feed_id));
     assert_eq!(price.output_value, output_value);
+    // Verify CID is stored
+    assert_eq!(price.ipfs_cid, cid_bytes(&f.env, cid));
 }
 
 #[test]
@@ -562,6 +630,7 @@ fn challenge_during_window_succeeds() {
         &timestamp_utc,
         &n32(&f.env, &salt),
         &n64(&f.env, &sig),
+        &None,
     );
     assert_eq!(reveal_res, Err(Ok(Error::InvalidCommitmentState)));
 }

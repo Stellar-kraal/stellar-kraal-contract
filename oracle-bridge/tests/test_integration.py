@@ -32,6 +32,7 @@ from oracle_bridge.attestation import (
     sha256,
 )
 from oracle_bridge.bridge import GEEResult, OracleBridge, SubmissionClient
+from oracle_bridge.ipfs import SimulatedIPFSClient
 
 
 # ── Fake submission client ────────────────────────────────────────────────────
@@ -62,6 +63,11 @@ class FakeSubmissionClient:
             reason = "InvalidAttestation"
             self.rejections.append((attestation, reason))
             raise ValueError(f"On-chain rejection: {reason}")
+
+    def submit_price_with_cid(
+        self, attestation: SignedAttestation, ipfs_cid: str
+    ) -> str:
+        return self.submit_price(attestation)
 
 
 # ── GEE script fixture ────────────────────────────────────────────────────────
@@ -98,8 +104,12 @@ class TestEndToEndPipeline:
         return FakeSubmissionClient(authorised_pubkey=signer.public_key_bytes())
 
     @pytest.fixture()
-    def bridge(self, signer, client) -> OracleBridge:
-        return OracleBridge(signer=signer, client=client)
+    def ipfs_client(self) -> SimulatedIPFSClient:
+        return SimulatedIPFSClient()
+
+    @pytest.fixture()
+    def bridge(self, signer, client, ipfs_client) -> OracleBridge:
+        return OracleBridge(signer=signer, client=client, ipfs_client=ipfs_client)
 
     @pytest.fixture()
     def gee_result(self) -> GEEResult:
@@ -114,26 +124,27 @@ class TestEndToEndPipeline:
     # ── Happy path ────────────────────────────────────────────────────────────
 
     def test_valid_submission_accepted(self, bridge, client, gee_result):
-        attestation, tx_ref = bridge.process(gee_result)
+        attestation, tx_ref, prov = bridge.process(gee_result)
 
         assert len(client.submissions) == 1
         assert len(client.rejections) == 0
         assert tx_ref.startswith("tx_")
+        assert prov.ipfs_cid is not None
 
     def test_attestation_payload_matches_gee_result(self, bridge, gee_result):
-        attestation, _ = bridge.process(gee_result)
+        attestation, _, _prov = bridge.process(gee_result)
 
         assert attestation.payload.output_value == gee_result.output_value
         assert attestation.payload.timestamp_utc == gee_result.timestamp_utc
         assert attestation.payload.script_hash == gee_result.script_hash
 
     def test_script_hash_is_sha256_of_source(self, bridge, gee_result):
-        attestation, _ = bridge.process(gee_result)
+        attestation, _, _prov = bridge.process(gee_result)
         expected = sha256(gee_result.script_source.encode("utf-8"))
         assert attestation.payload.script_hash == expected
 
     def test_public_key_matches_signer(self, signer, bridge, gee_result):
-        attestation, _ = bridge.process(gee_result)
+        attestation, _, _prov = bridge.process(gee_result)
         assert attestation.public_key == signer.public_key_bytes()
 
     def test_multiple_submissions_all_accepted(self, bridge, client):
@@ -152,10 +163,10 @@ class TestEndToEndPipeline:
 
     # ── Rejection path ────────────────────────────────────────────────────────
 
-    def test_tampered_output_value_rejected_on_chain(self, signer, client, gee_result):
+    def test_tampered_output_value_rejected_on_chain(self, signer, client, ipfs_client, gee_result):
         """Mutate the output value after signing — the contract must reject it."""
-        bridge = OracleBridge(signer=signer, client=client)
-        attestation, _ = bridge.process(gee_result)
+        bridge = OracleBridge(signer=signer, client=client, ipfs_client=ipfs_client)
+        attestation, _, _prov = bridge.process(gee_result)
 
         # Construct a tampered attestation using the original signature but
         # a different output_value (simulates a man-in-the-middle attack).
@@ -179,20 +190,20 @@ class TestEndToEndPipeline:
 
         assert len(client.rejections) == 1
 
-    def test_wrong_key_rejected_on_chain(self, bridge, client, gee_result):
+    def test_wrong_key_rejected_on_chain(self, bridge, client, ipfs_client, gee_result):
         """Attestation signed by a different key must be rejected."""
         other_signer = OracleSigner.generate()
-        other_bridge = OracleBridge(signer=other_signer, client=client)
+        other_bridge = OracleBridge(signer=other_signer, client=client, ipfs_client=ipfs_client)
 
         with pytest.raises(ValueError, match="InvalidAttestation"):
             other_bridge.process(gee_result)
 
         assert len(client.rejections) == 1
 
-    def test_tampered_signature_rejected(self, signer, client, gee_result):
+    def test_tampered_signature_rejected(self, signer, client, ipfs_client, gee_result):
         """A bit-flipped signature must be rejected."""
-        bridge = OracleBridge(signer=signer, client=client)
-        attestation, _ = bridge.process(gee_result)
+        bridge = OracleBridge(signer=signer, client=client, ipfs_client=ipfs_client)
+        attestation, _, _prov = bridge.process(gee_result)
 
         # Clear the accepted submission so the next call starts fresh.
         client.submissions.clear()
@@ -213,14 +224,14 @@ class TestEndToEndPipeline:
     # ── Serialisation round-trip across the wire ──────────────────────────────
 
     def test_dict_serialisation_roundtrip(self, bridge, gee_result):
-        attestation, _ = bridge.process(gee_result)
+        attestation, _, _prov = bridge.process(gee_result)
         wire = attestation.to_dict()
         recovered = SignedAttestation.from_dict(wire)
 
         verifier = OracleVerifier(recovered.public_key)
         assert verifier.verify(recovered) is True
 
-    def test_canonical_params_order_invariant(self, signer, client):
+    def test_canonical_params_order_invariant(self, signer, client, ipfs_client):
         """
         Params submitted in different key orders must hash to the same value
         and therefore produce identical, accepted attestations.
@@ -243,12 +254,12 @@ class TestEndToEndPipeline:
             timestamp_utc=1_720_000_000,
         )
 
-        bridge = OracleBridge(signer=signer, client=client)
-        att_a, _ = bridge.process(result_a)
+        bridge = OracleBridge(signer=signer, client=client, ipfs_client=ipfs_client)
+        att_a, _, _prov_a = bridge.process(result_a)
 
         client.submissions.clear()  # reset
 
-        att_b, _ = bridge.process(result_b)
+        att_b, _, _prov_b = bridge.process(result_b)
 
         assert att_a.payload.input_params_hash == att_b.payload.input_params_hash
 

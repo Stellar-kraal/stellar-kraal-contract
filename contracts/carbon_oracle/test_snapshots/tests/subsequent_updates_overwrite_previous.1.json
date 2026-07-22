@@ -18,7 +18,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "de8528722027173af1d79e2063cab6992087473251362f7c5c1218e1199eb60e"
+                  "bytes": "14ede9d44a7bd6788a60aeeee5ce0f7318229d582a9b81f9eb07f825633ab275"
                 },
                 {
                   "u32": 10
@@ -58,8 +58,9 @@
                   "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "bytes": "37aac90f1c01053021b96e88f05bbca8c1bff464c96c16816b16900e2ce30e60ab36ce7f354d38f75f5c3aabf9e4e7b2501e1500f373736673f250969778860c"
-                }
+                  "bytes": "7a95362427c01704bd80e1cf2bcb489525e528f6dc6fbfbccd723a0ea960dda411254c997e4c9cf7dced8e13aa93924e19d4c3d6bb346146a4adf8dcdf04b601"
+                },
+                "void"
               ]
             }
           },
@@ -95,8 +96,9 @@
                   "bytes": "636172626f6e0000000000000000000000000000000000000000000000000000"
                 },
                 {
-                  "bytes": "924675ee73e4ebd5c2a06e5980379352237f816367855726d1f097b4c757fe780e1e398d1315c53081729bb4ad37b4e6592b0a5dec7658ff3702882b8bdf7902"
-                }
+                  "bytes": "768c47780b893bbf805c8d2510362f224c68a3d570ab1348f173fdf507fae4f216843fb9192a0362eb9669a1188876abc270f78d6d395ac1690e72b9d7882704"
+                },
+                "void"
               ]
             }
           },
@@ -159,6 +161,14 @@
                       },
                       "val": {
                         "bytes": "beef000000000000000000000000000000000000000000000000000000000000"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "ipfs_cid"
+                      },
+                      "val": {
+                        "bytes": ""
                       }
                     },
                     {
@@ -249,18 +259,10 @@
                             },
                             {
                               "key": {
-                                "symbol": "last_heartbeat"
-                              },
-                              "val": {
-                                "i64": 0
-                              }
-                            },
-                            {
-                              "key": {
                                 "symbol": "oracle_pubkey"
                               },
                               "val": {
-                                "bytes": "de8528722027173af1d79e2063cab6992087473251362f7c5c1218e1199eb60e"
+                                "bytes": "14ede9d44a7bd6788a60aeeee5ce0f7318229d582a9b81f9eb07f825633ab275"
                               }
                             }
                           ]
