@@ -1,0 +1,66 @@
+# cargo-deny configuration for the stellar-kraal-contract workspace.
+# Docs: https://embarkstudios.github.io/cargo-deny/
+#
+# Run locally with: cargo deny check
+# Runs in CI on every PR: see .github/workflows/ci.yml
+
+[advisories]
+# The RustSec advisory database is fetched on every `cargo deny check`, so PRs
+# fail as soon as a new CVE/unsoundness advisory affects the dependency tree.
+db-path = "~/.cargo/advisory-dbs"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Fail the check when a crate version in the lockfile has been yanked.
+yanked = "deny"
+# Accepted advisory exceptions go here, each with a justification comment.
+ignore = [
+    # Transitive dep of ark-ec/ark-ff (pulled in by soroban-env-host's
+    # BLS12-381 support). Unmaintained upstream with no replacement;
+    # upgrading or removing it requires a Soroban SDK bump, tracked
+    # separately from this issue.
+    { id = "RUSTSEC-2024-0388", reason = "derivative is a transitive dep of ark-* via soroban-env-host; no safe upgrade available." },
+    # Transitive dep of ark-ff (via soroban-env-host). dtolnay's `paste` is
+    # ubiquitous and effectively frozen; RustSec marks it unmaintained but
+    # no patched alternative exists.
+    { id = "RUSTSEC-2024-0436", reason = "paste is a transitive dep of ark-ff via soroban-env-host; no replacement available." },
+]
+
+[bans]
+# Multiple versions of the same crate are common in the Soroban/Stellar
+# dependency tree (e.g. syn, darling, base64); warn instead of failing the
+# build so pre-existing duplicates are visible but not blocking.
+multiple-versions = "warn"
+# Dependency specs without an explicit version (workspace-internal path
+# dependencies like `arithmetic = { path = "../arithmetic" }`) are treated
+# as wildcards; these are pinned to the workspace checkout, not crates.io.
+wildcards = "allow"
+
+[licenses]
+# Licenses allowed for every crate in the dependency graph. Anything not
+# listed here is rejected, and a crate with no detectable license fails the
+# check (unlicensed defaults to deny in cargo-deny >= 0.20).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "ISC",
+    "Unicode-3.0",
+    # Required by the Soroban/Stellar crypto stack pulled in by
+    # soroban-env-host (ed25519-dalek, curve25519-dalek, subtle).
+    "BSD-3-Clause",
+    # Required by wasmparser/wasmparser-nostd, pulled in by soroban-wasmi.
+    "Apache-2.0 WITH LLVM-exception",
+]
+# Treat crates whose license cannot be determined with at least this
+# confidence as unlicensed (and therefore rejected).
+confidence-threshold = 0.8
+# Per-crate exceptions go here, each with the extra license(s) and a
+# justification comment. Example:
+# exceptions = [
+#   { name = "ring", version = "*", allow = ["OpenSSL"], reason = "..." },
+# ]
+
+[sources]
+# Only crates from the crates.io registry are allowed.
+unknown-registry = "deny"
+unknown-git = "deny"
+# Git dependencies, if ever added, must be listed here with a justification:
+# allow-git = ["https://github.com/example/repo"]

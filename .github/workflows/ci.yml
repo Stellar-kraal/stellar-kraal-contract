@@ -46,6 +46,19 @@ jobs:
       - name: wasm build
         run: cargo build --release --target wasm32-unknown-unknown -p stellarkraal
 
+  # Supply-chain security: scans the dependency tree against the RustSec
+  # advisory database (CVEs, yanked crates) and enforces license/source
+  # policy from deny.toml on every PR. See issue #122.
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
   fuzzing:
     runs-on: ubuntu-latest
     steps:
