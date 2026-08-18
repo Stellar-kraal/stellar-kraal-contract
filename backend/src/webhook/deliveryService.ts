@@ -15,7 +15,7 @@
 import { createHmac } from 'crypto';
 import { Store } from '../db/database';
 import { nextAttemptAt } from '../common/retry';
-
+import { logger } from '../common/logger';
 export interface WebhookDeliveryOptions {
   maxAttempts?: number;
   baseBackoffSeconds?: number;
@@ -177,8 +177,7 @@ export class WebhookDeliveryService {
     this.timer = setTimeout(() => {
       void this.drain()
         .catch((err) => {
-          // eslint-disable-next-line no-console
-          console.error('[webhook] drain error:', err);
+          logger.error({ err }, '[webhook] drain error');
         })
         .finally(() => this.scheduleDrain());
     }, interval);
