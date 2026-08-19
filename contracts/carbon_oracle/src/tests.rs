@@ -16,6 +16,9 @@
 //! - `get_price` on unknown feed returns `FeedNotFound`.
 //! - IPFS CID stored and retrieved from PriceEntry.
 //! - IPFS CID too long rejected with CidTooLong.
+//! - `get_price` rejects with `StaleFeed` once the oracle's last heartbeat is
+//!   older than `HEARTBEAT_EXPIRY_SECONDS`.
+//! - Refreshing the heartbeat restores normal `get_price` behavior.
 
 #![cfg(test)]
 
@@ -25,7 +28,10 @@ use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
 use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, Bytes, BytesN, Env};
 
-use crate::{CarbonOracle, CarbonOracleClient, CommitmentState, Error, SCHEMA_VERSION};
+use crate::{
+    CarbonOracle, CarbonOracleClient, CommitmentState, Error, HEARTBEAT_EXPIRY_SECONDS,
+    SCHEMA_VERSION,
+};
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -639,7 +645,7 @@ fn challenge_during_window_succeeds() {
 fn is_price_stale_respects_configured_max_age() {
     let f = Fixture::new();
     f.env.ledger().with_mut(|li| li.timestamp = 1_720_000_000);
-    f.submit_ok(100, 1_719_999_700, None, None, None, None);
+    f.submit_ok(100, 1_719_999_700, None, None, None, None, None);
 
     assert!(!f.client.is_price_stale(&n32(&f.env, &f.feed_id), &300_i64));
     assert!(f.client.is_price_stale(&n32(&f.env, &f.feed_id), &299_i64));
@@ -651,6 +657,53 @@ fn heartbeat_updates_liveness_timestamp() {
     f.client.heartbeat(&f.oracle, &1_720_000_111_i64);
     let cfg = f.client.get_config();
     assert_eq!(cfg.last_heartbeat, 1_720_000_111);
+}
+
+#[test]
+fn get_price_rejects_stale_feed_after_heartbeat_expiry() {
+    let f = Fixture::new();
+
+    // Start the ledger at a fixed timestamp and submit a perfectly valid price.
+    f.env.ledger().with_mut(|li| li.timestamp = 1_720_000_000);
+    f.submit_ok(100, 1_720_000_000, None, None, None, None, None);
+
+    // Send a heartbeat at the current ledger time; the feed is fresh, so
+    // `get_price` still returns the cached entry.
+    f.client.heartbeat(&f.oracle, &1_720_000_000_i64);
+    let entry = f.client.get_price(&n32(&f.env, &f.feed_id));
+    assert_eq!(entry.output_value, 100);
+
+    // Advance the ledger past the heartbeat expiry window without sending a
+    // fresh heartbeat. The stored price itself never changed, but the feed
+    // is now considered stale and must not be served.
+    f.env.ledger().with_mut(|li| {
+        li.timestamp = 1_720_000_000 + (HEARTBEAT_EXPIRY_SECONDS as u64) + 1;
+    });
+    let result = f.client.try_get_price(&n32(&f.env, &f.feed_id));
+    assert_eq!(result, Err(Ok(Error::StaleFeed)));
+}
+
+#[test]
+fn get_price_resumes_after_heartbeat_refresh() {
+    let f = Fixture::new();
+
+    f.env.ledger().with_mut(|li| li.timestamp = 1_720_000_000);
+    f.submit_ok(100, 1_720_000_000, None, None, None, None, None);
+    f.client.heartbeat(&f.oracle, &1_720_000_000_i64);
+
+    // Expire the heartbeat.
+    f.env.ledger().with_mut(|li| {
+        li.timestamp = 1_720_000_000 + (HEARTBEAT_EXPIRY_SECONDS as u64) + 1;
+    });
+    let stale = f.client.try_get_price(&n32(&f.env, &f.feed_id));
+    assert_eq!(stale, Err(Ok(Error::StaleFeed)));
+
+    // Refreshing the heartbeat at the (now-current) ledger time restores
+    // normal `get_price` behavior without needing a new price submission.
+    let current_ts = 1_720_000_000_i64 + HEARTBEAT_EXPIRY_SECONDS + 1;
+    f.client.heartbeat(&f.oracle, &current_ts);
+    let entry = f.client.get_price(&n32(&f.env, &f.feed_id));
+    assert_eq!(entry.output_value, 100);
 }
 
 #[test]
@@ -680,7 +733,7 @@ fn circuit_breaker_trip_and_reset() {
 #[test]
 fn large_price_deviation_trips_circuit_breaker() {
     let f = Fixture::new();
-    f.submit_ok(100, 1_720_000_000, None, None, None, None);
+    f.submit_ok(100, 1_720_000_000, None, None, None, None, None);
     let payload = build_payload_bytes(
         &f.script_hash,
         &f.input_params_hash,
@@ -697,6 +750,7 @@ fn large_price_deviation_trips_circuit_breaker() {
         &1_720_000_060_i64,
         &n32(&f.env, &f.feed_id),
         &n64(&f.env, &sig),
+        &None,
     );
     assert_eq!(
         f.client.get_circuit_breaker_state(),

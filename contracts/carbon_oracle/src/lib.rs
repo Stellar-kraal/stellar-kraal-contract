@@ -34,6 +34,16 @@ use soroban_sdk::{
 const CONFIG: Symbol = symbol_short!("CONFIG");
 const CIRCUIT: Symbol = symbol_short!("CIRCUIT");
 
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
+
+/// Maximum number of per-source values a single aggregated submission may
+/// carry (mirrors `AggregatedPriceEntry::source_values`, which stores up to
+/// 10 sources).
+const MAX_AGGREGATION_SOURCES: u32 = 10;
+
 fn feed_key(_e: &Env, feed_id: &BytesN<32>) -> (Symbol, BytesN<32>) {
     (symbol_short!("FEED"), feed_id.clone())
 }
@@ -52,6 +62,14 @@ pub const SCHEMA_VERSION: u8 = 1;
 
 /// Maximum length of an IPFS CID string in bytes (CIDv1 Base32 is typically ≤59 bytes).
 pub const MAX_CID_LEN: u32 = 64;
+
+/// Maximum age, in seconds, that an oracle heartbeat may reach before price
+/// queries are treated as stale and rejected with [`Error::StaleFeed`].
+///
+/// Enforcement only activates once the oracle operator has sent at least one
+/// heartbeat (`Config::last_heartbeat != 0`); feeds that never opt into the
+/// heartbeat liveness mechanism are unaffected, preserving prior behaviour.
+pub const HEARTBEAT_EXPIRY_SECONDS: i64 = 3600;
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -206,6 +224,9 @@ pub enum Error {
     CircuitBreakerTripped = 14,
     /// Contract operations are paused by the circuit breaker.
     CircuitBreakerOpen = 15,
+    /// The oracle's last heartbeat is older than [`HEARTBEAT_EXPIRY_SECONDS`];
+    /// the feed is considered stale and its cached price is not returned.
+    StaleFeed = 16,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -666,8 +687,19 @@ impl CarbonOracle {
     /// The returned [`PriceEntry`] now includes `ipfs_cid` — use it to fetch
     /// the full provenance record from IPFS for audit and reproducibility
     /// verification.
+    ///
+    /// If the oracle operator has sent at least one [`Self::heartbeat`] and
+    /// it is older than [`HEARTBEAT_EXPIRY_SECONDS`], the feed is considered
+    /// stale and this returns [`Error::StaleFeed`] instead of the cached
+    /// price, regardless of how fresh the stored entry's own timestamp is.
     pub fn get_price(e: Env, feed_id: BytesN<32>) -> Result<PriceEntry, Error> {
-        require_config(&e)?;
+        let cfg = require_config(&e)?;
+        if cfg.last_heartbeat != 0 {
+            let now = e.ledger().timestamp() as i64;
+            if now.saturating_sub(cfg.last_heartbeat) > HEARTBEAT_EXPIRY_SECONDS {
+                return Err(Error::StaleFeed);
+            }
+        }
         {
             let key = feed_key(&e, &feed_id);
             let entry = e
