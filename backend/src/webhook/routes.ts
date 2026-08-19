@@ -23,12 +23,6 @@ function generateSecret(): string {
   return randomBytes(32).toString('hex');
 }
 
-function stripSecret<T extends { secret: string }>(row: T): Omit<T, 'secret'> {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { secret: _s, ...rest } = row;
-  return rest;
-}
-
 function toResponse(row: import('../db/database').WebhookRegistrationRow) {
   return {
     id: row.id,

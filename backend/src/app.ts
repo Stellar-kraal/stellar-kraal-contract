@@ -50,7 +50,7 @@ function defaultRedis(): RedisLike | undefined {
   const url = process.env.REDIS_URL;
   if (!url) return undefined;
   // Lazy import so deployments without Redis never load the client.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const IORedis = require('ioredis') as new (u: string) => RedisLike;
   return new IORedis(url);
 }

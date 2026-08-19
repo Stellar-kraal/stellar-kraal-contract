@@ -5,7 +5,8 @@ oracle_bridge.cli
 Command-line interface for the oracle bridge.
 
 Provides the ``replay-dlq`` command for operators to replay failed
-submissions from the dead-letter queue.
+submissions from the dead-letter queue, and ``submit`` for running
+the full GEE → attestation → IPFS → Soroban pipeline.
 """
 
 from __future__ import annotations
@@ -14,12 +15,32 @@ import argparse
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 from oracle_bridge.resilience import DeadLetterQueue
 
 logger = logging.getLogger(__name__)
+
+
+# ── Dry-run submission client ────────────────────────────────────────────────
+
+
+class DryRunClient:
+    """Drop-in :class:`SubmissionClient` that records calls without hitting the network."""
+
+    def submit_price(self, attestation: Any) -> str:
+        return "dry-run-tx"
+
+    def submit_price_with_cid(self, attestation: Any, ipfs_cid: str) -> str:
+        return "dry-run-tx"
+
+    def commit_price(self, feed_id: Any, commitment_hash: bytes) -> str:
+        return "dry-run-tx"
+
+    def reveal_price(self, attestation: Any, salt: bytes) -> str:
+        return "dry-run-tx"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,6 +50,62 @@ def build_parser() -> argparse.ArgumentParser:
         description="GEE to Soroban carbon oracle attestation pipeline",
     )
     sub = parser.add_subparsers(dest="command", help="Available commands")
+
+    # ── submit ─────────────────────────────────────────────────────────────
+    submit = sub.add_parser(
+        "submit",
+        help="Run the GEE → attestation → IPFS → on-chain pipeline",
+    )
+    submit.add_argument(
+        "--feed-id",
+        type=str,
+        required=True,
+        help="Feed / asset identifier (e.g. CATTLE-SPOT)",
+    )
+    submit.add_argument(
+        "--results-file",
+        type=str,
+        required=True,
+        help="Path to a JSON file containing GEE results",
+    )
+    submit.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Run the full pipeline (attest + pin to IPFS) but skip on-chain submission; output JSON",
+    )
+    submit.add_argument(
+        "--key-file",
+        type=str,
+        default=None,
+        help="Path to an Ed25519 PEM key file for the oracle signer (omit to generate a throwaway key)",
+    )
+    submit.add_argument(
+        "--outlier-method",
+        type=str,
+        choices=["iqr", "mad", "none"],
+        default="iqr",
+        help="Outlier rejection method for multi-source aggregation (default: iqr)",
+    )
+    submit.add_argument(
+        "--iqr-multiplier",
+        type=float,
+        default=1.5,
+        help="IQR multiplier for outlier detection (default: 1.5)",
+    )
+    submit.add_argument(
+        "--ipfs-mode",
+        type=str,
+        choices=["simulated", "local"],
+        default="simulated",
+        help="IPFS backend: simulated (in-memory) or local (default: simulated)",
+    )
+    submit.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Output results as JSON (default: human-readable summary)",
+    )
 
     # ── replay-dlq ────────────────────────────────────────────────────────
     replay = sub.add_parser(
@@ -91,6 +168,153 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def cmd_submit(args: argparse.Namespace) -> int:
+    """Execute the ``submit`` subcommand."""
+    from oracle_bridge.attestation import OracleSigner
+    from oracle_bridge.bridge import OracleBridge, GEEResult
+    from oracle_bridge.aggregation import (
+        AggregationConfig,
+        OutlierRejectionMethod,
+        PriceSource,
+    )
+    from oracle_bridge.ipfs import SimulatedIPFSClient, LocalIPFSClient
+
+    # ── load GEE results from JSON file ───────────────────────────────────
+    results_path = Path(args.results_file)
+    if not results_path.exists():
+        print(f"Results file not found: {results_path}", file=sys.stderr)
+        return 1
+
+    try:
+        raw = json.loads(results_path.read_text())
+    except json.JSONDecodeError as exc:
+        print(f"Invalid JSON in results file: {exc}", file=sys.stderr)
+        return 1
+
+    # Parse into GEEResult objects.  The file can be either:
+    #   - a dict  { source_id: { script_source, input_params, ... } }
+    #   - a list  [ { script_source, input_params, ... } ]
+    gee_results: dict[str, GEEResult] = {}
+    if isinstance(raw, dict):
+        for key, entry in raw.items():
+            gee_results[key] = GEEResult(
+                script_source=entry.get("script_source", "// dry-run"),
+                input_params=entry.get("input_params", {}),
+                output_value=int(entry["output_value"]),
+                feed_id=entry.get("feed_id", args.feed_id),
+                timestamp_utc=entry.get("timestamp_utc"),
+            )
+    elif isinstance(raw, list):
+        for idx, entry in enumerate(raw):
+            source_id = entry.get("source_id", f"source_{idx}")
+            gee_results[source_id] = GEEResult(
+                script_source=entry.get("script_source", "// dry-run"),
+                input_params=entry.get("input_params", {}),
+                output_value=int(entry["output_value"]),
+                feed_id=entry.get("feed_id", args.feed_id),
+                timestamp_utc=entry.get("timestamp_utc"),
+            )
+    else:
+        print("Results file must be a JSON object or array", file=sys.stderr)
+        return 1
+
+    if not gee_results:
+        print("No GEE results found in file", file=sys.stderr)
+        return 1
+
+    # ── signer ────────────────────────────────────────────────────────────
+    if args.key_file:
+        key_path = Path(args.key_file)
+        if not key_path.exists():
+            print(f"Key file not found: {key_path}", file=sys.stderr)
+            return 1
+        signer = OracleSigner.from_pem(key_path.read_text())
+    else:
+        signer = OracleSigner.generate()
+
+    # ── IPFS client ───────────────────────────────────────────────────────
+    if args.ipfs_mode == "local":
+        from oracle_bridge.ipfs import LocalIPFSClient
+        ipfs_client = LocalIPFSClient()
+    else:
+        ipfs_client = SimulatedIPFSClient()
+
+    # ── submission client ─────────────────────────────────────────────────
+    if args.dry_run:
+        client = DryRunClient()
+    else:
+        # Live mode requires a Soroban RPC client (not yet implemented).
+        # For now, only dry-run is supported.
+        print(
+            "Live on-chain submission is not yet implemented.  "
+            "Use --dry-run to test the full pipeline without a network.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # ── aggregation config ────────────────────────────────────────────────
+    outlier_map = {
+        "iqr": OutlierRejectionMethod.IQR,
+        "mad": OutlierRejectionMethod.MAD,
+        "none": OutlierRejectionMethod.NONE,
+    }
+    source_ids = list(gee_results.keys())
+    agg_config = AggregationConfig(
+        sources=source_ids,
+        weights={s: 1.0 for s in source_ids},
+        outlier_method=outlier_map[args.outlier_method],
+        iqr_multiplier=args.iqr_multiplier,
+    )
+
+    # ── run pipeline ──────────────────────────────────────────────────────
+    bridge = OracleBridge(
+        signer, client,
+        ipfs_client=ipfs_client,
+        aggregation_config=agg_config,
+    )
+
+    try:
+        result, attestation, tx_ref, provenance = bridge.aggregate_and_submit(
+            gee_results
+        )
+    except Exception as exc:
+        print(f"Pipeline failed: {exc}", file=sys.stderr)
+        return 1
+
+    # ── output ────────────────────────────────────────────────────────────
+    output = {
+        "feed_id": result.feed_id if isinstance(result.feed_id, str)
+                   else result.feed_id.decode("utf-8").rstrip("\x00"),
+        "aggregate_value": result.aggregate_value,
+        "source_values": result.source_values,
+        "weights_used": result.weights_used,
+        "rejected_sources": result.rejected_sources,
+        "outlier_method": result.outlier_method,
+        "ipfs_cid": result.ipfs_cid or provenance.ipfs_cid,
+        "tx_ref": tx_ref,
+        "attestation_public_key": attestation.public_key.hex(),
+        "attestation_signature": attestation.signature.hex(),
+        "dry_run": args.dry_run,
+        "timestamp_utc": result.timestamp_utc,
+    }
+
+    if args.json:
+        print(json.dumps(output, indent=2))
+    else:
+        mode_label = "DRY-RUN" if args.dry_run else "LIVE"
+        print(f"[{mode_label}] Oracle submission complete")
+        print(f"  Feed:         {output['feed_id']}")
+        print(f"  Aggregate:    {output['aggregate_value']}")
+        print(f"  Sources:      {len(output['source_values'])}")
+        if output["rejected_sources"]:
+            print(f"  Rejected:     {output['rejected_sources']}")
+        print(f"  IPFS CID:     {output['ipfs_cid']}")
+        print(f"  TX ref:       {output['tx_ref']}")
+        print(f"  Oracle key:   {output['attestation_public_key'][:16]}…")
+
+    return 0
 
 
 def cmd_replay_dlq(args: argparse.Namespace) -> int:
@@ -221,7 +445,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "replay-dlq":
+    if args.command == "submit":
+        return cmd_submit(args)
+    elif args.command == "replay-dlq":
         return cmd_replay_dlq(args)
     elif args.command == "dlq-stats":
         return cmd_dlq_stats(args)

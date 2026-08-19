@@ -129,13 +129,15 @@ fn test_liquidation_boundary() {
         li.max_entry_ttl = 10_000_001;
     });
     let client = deploy(&env);
-    // Use LTV=90% so a loan at 90% of appraised has HF = 8500*100 / (9000*100) = 94 < 120
+    // LTV=90% max (collateral_ratio_bps=9000). liquidation_threshold_bps=9500
+    // (> collateral) so a max loan at 90% of appraised has
+    // HF = 1_000_000 * 9500 * 100 / (900_000 * 10_000) = 105 < 120 → liquidatable.
     let admin = Address::generate(&env);
     let o1 = Address::generate(&env);
     let o2 = Address::generate(&env);
     let o3 = Address::generate(&env);
     client.initialize(
-        &admin, &o1, &o2, &o3, &9_000, &8_500, &500, &1_000, &0, &100,
+        &admin, &o1, &o2, &o3, &9_000, &9_500, &500, &1_000, &0, &100,
     );
 
     let owner = Address::generate(&env);
@@ -233,4 +235,95 @@ fn test_unauthorized_oracle_rejected() {
     let rogue = Address::generate(&env);
     let res = client.try_submit_price(&rogue, &999);
     assert_eq!(res, Err(Ok(Error::Unauthorized)));
+}
+
+// ── initialize() config validation ─────────────────────────────────────────
+
+#[test]
+fn test_initialize_zero_collateral_rejected() {
+    let env = make_env();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let o1 = Address::generate(&env);
+    let o2 = Address::generate(&env);
+    let o3 = Address::generate(&env);
+    let res = client.try_initialize(
+        &admin, &o1, &o2, &o3, &0, &8_500, &500, &1_000, &0, &100,
+    );
+    assert_eq!(res, Err(Ok(Error::InvalidConfig)));
+}
+
+#[test]
+fn test_initialize_negative_collateral_rejected() {
+    let env = make_env();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let o1 = Address::generate(&env);
+    let o2 = Address::generate(&env);
+    let o3 = Address::generate(&env);
+    let res = client.try_initialize(
+        &admin, &o1, &o2, &o3, &-1, &8_500, &500, &1_000, &0, &100,
+    );
+    assert_eq!(res, Err(Ok(Error::InvalidConfig)));
+}
+
+#[test]
+fn test_initialize_threshold_equal_collateral_rejected() {
+    let env = make_env();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let o1 = Address::generate(&env);
+    let o2 = Address::generate(&env);
+    let o3 = Address::generate(&env);
+    // liquidation_threshold_bps == collateral_ratio_bps is not allowed
+    let res = client.try_initialize(
+        &admin, &o1, &o2, &o3, &7_000, &7_000, &500, &1_000, &0, &100,
+    );
+    assert_eq!(res, Err(Ok(Error::InvalidConfig)));
+}
+
+#[test]
+fn test_initialize_threshold_below_collateral_rejected() {
+    let env = make_env();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let o1 = Address::generate(&env);
+    let o2 = Address::generate(&env);
+    let o3 = Address::generate(&env);
+    // liquidation_threshold_bps < collateral_ratio_bps is not allowed
+    let res = client.try_initialize(
+        &admin, &o1, &o2, &o3, &9_000, &8_500, &500, &1_000, &0, &100,
+    );
+    assert_eq!(res, Err(Ok(Error::InvalidConfig)));
+}
+
+#[test]
+fn test_initialize_threshold_above_100pct_rejected() {
+    let env = make_env();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let o1 = Address::generate(&env);
+    let o2 = Address::generate(&env);
+    let o3 = Address::generate(&env);
+    // liquidation_threshold_bps > 10_000 (>100%) would make all loans
+    // permanently liquidatable
+    let res = client.try_initialize(
+        &admin, &o1, &o2, &o3, &7_000, &10_500, &500, &1_000, &0, &100,
+    );
+    assert_eq!(res, Err(Ok(Error::InvalidConfig)));
+}
+
+#[test]
+fn test_initialize_valid_config_succeeds() {
+    let env = make_env();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let o1 = Address::generate(&env);
+    let o2 = Address::generate(&env);
+    let o3 = Address::generate(&env);
+    // collateral 7000, threshold 8500 (threshold > collateral, both <= 10_000)
+    let res = client.try_initialize(
+        &admin, &o1, &o2, &o3, &7_000, &8_500, &500, &1_000, &0, &100,
+    );
+    assert_eq!(res, Ok(Ok(())));
 }

@@ -86,6 +86,7 @@ pub enum Error {
     InsufficientPrice = 10,
     ArithmeticError = 11,
     StalePrices = 12,
+    InvalidConfig = 13,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -180,6 +181,22 @@ impl StellarKraal {
         if e.storage().instance().has(&CONFIG) {
             return Err(Error::AlreadyInitialized);
         }
+
+        // Guard against misconfiguration that would make the protocol unusable:
+        //  - collateral_ratio_bps must be a positive bps value in 1..=10_000
+        //    (0 or negative makes opening any loan impossible).
+        //  - liquidation_threshold_bps must exceed collateral_ratio_bps and must
+        //    not exceed 10_000 (>100% would make every loan permanently
+        //    liquidatable).
+        if collateral_ratio_bps <= 0 || collateral_ratio_bps > 10_000 {
+            return Err(Error::InvalidConfig);
+        }
+        if liquidation_threshold_bps <= collateral_ratio_bps
+            || liquidation_threshold_bps > 10_000
+        {
+            return Err(Error::InvalidConfig);
+        }
+
         admin.require_auth();
         e.storage().instance().set(
             &CONFIG,

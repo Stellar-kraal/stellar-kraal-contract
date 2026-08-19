@@ -69,6 +69,12 @@ describe('signPayload', () => {
     const sig = signPayload('mysecret', '{"foo":"bar"}');
     expect(sig).toMatch(/^sha256=[0-9a-f]{64}$/);
   });
+  
+  test('matches the known HMAC-SHA256 test vector', () => {
+    expect(signPayload('secret', 'payload')).toBe(
+      'sha256=b82fcb791acec57859b989b430a826488ce2e479fdf92326bd0a2e8375a42ba4',
+    );
+  });
 
   test('different secrets produce different signatures', () => {
     const payload = '{"event":"test"}';
@@ -543,7 +549,7 @@ describe('Health endpoint', () => {
   });
 
   test('reports correct pending count after indexing events', async () => {
-    const { app, store, rpc, indexer } = makeTestEnv();
+    const { app, rpc, indexer } = makeTestEnv();
 
     // Register two webhooks
     await request(app).post('/webhooks').send({ url: 'https://a.com', eventType: 'listing_created' });
