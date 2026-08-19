@@ -392,7 +392,7 @@ def validate_provenance_record(record: dict[str, Any]) -> None:
 
     # Additional structural validation with jsonschema if available.
     try:
-        import jsonschema  # type: ignore[import]
+        import jsonschema
 
         validator = jsonschema.Draft202012Validator(PROVENANCE_SCHEMA)
         schema_errors = [str(e.message) for e in validator.iter_errors(record)]

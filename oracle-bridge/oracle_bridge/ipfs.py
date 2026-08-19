@@ -159,8 +159,8 @@ class LocalIPFSClient:
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                result = json.loads(resp.read().decode())
-                return result["Hash"]
+                result: dict[str, Any] = json.loads(resp.read().decode())
+                return str(result["Hash"])
         except urllib.error.URLError as exc:
             raise RuntimeError(
                 f"Cannot reach IPFS API at {self._api_url}: {exc}"
@@ -172,7 +172,8 @@ class LocalIPFSClient:
         req = urllib.request.Request(url, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                return resp.read()
+                data: bytes = resp.read()
+                return data
         except urllib.error.URLError as exc:
             raise RuntimeError(
                 f"Cannot retrieve CID {cid!r} from gateway {self._gateway_url}: {exc}"
@@ -230,4 +231,5 @@ def fetch_provenance_record(
     Returns the record as a dict.
     """
     content = client.get(cid)
-    return json.loads(content.decode("utf-8"))
+    result: dict[str, Any] = json.loads(content.decode("utf-8"))
+    return result

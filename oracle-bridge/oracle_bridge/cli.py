@@ -235,6 +235,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         signer = OracleSigner.generate()
 
     # ── IPFS client ───────────────────────────────────────────────────────
+    ipfs_client: SimulatedIPFSClient | LocalIPFSClient
     if args.ipfs_mode == "local":
         from oracle_bridge.ipfs import LocalIPFSClient
         ipfs_client = LocalIPFSClient()
@@ -356,6 +357,7 @@ def cmd_replay_dlq(args: argparse.Namespace) -> int:
             ToucanProtocolAdapter,
             XpansivCBLAdapter,
         )
+        from oracle_bridge.adapters.base import FeedAdapter
 
         success_count = 0
         for entry in entries:
@@ -366,12 +368,17 @@ def cmd_replay_dlq(args: argparse.Namespace) -> int:
                 dlq_db_path=str(db_path),
             )
 
+            adapter: FeedAdapter
             if "xpansiv" in entry.feed_id.lower() or "cbl" in entry.feed_id.lower():
                 adapter = XpansivCBLAdapter(config)
             elif "toucan" in entry.feed_id.lower() or entry.feed_id in ("BCT", "NCT"):
                 adapter = ToucanProtocolAdapter(config)
             else:
                 print(f"  Unknown feed type for {entry.feed_id}, skipping")
+                continue
+
+            if entry.id is None:
+                print(f"  Skipping entry with no id")
                 continue
 
             try:

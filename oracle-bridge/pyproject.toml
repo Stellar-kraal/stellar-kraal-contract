@@ -109,7 +109,7 @@ exclude = [
 ]
 
 # ── mypy ────────────────────────────────────────────────────────────────────
-# Documented for issue #121. `mypy oracle_bridge` is the CI command.
+# `mypy oracle_bridge` is the CI command, run in `--strict` mode (issue #126).
 # `explicit_package_bases` is required because this directory is named
 # `oracle-bridge` (invalid as a Python package) and contains an `__init__.py`.
 
@@ -118,24 +118,9 @@ python_version = "3.10"
 files = ["oracle_bridge"]
 explicit_package_bases = true
 mypy_path = "."
+strict = true
+disallow_untyped_defs = true
+disallow_any_generics = true
 ignore_missing_imports = true
 warn_unused_configs = true
 show_error_codes = true
-# Known typing issues in the existing package (Noneable sqlite connection,
-# Formatter vs StructuredFormatter assignment, adapter union, etc.). Fixing
-# them requires Python source changes, which are out of scope for #121.
-# Other mypy error codes still fail the job.
-disable_error_code = [
-    "assignment",
-    "union-attr",
-    "var-annotated",
-    "arg-type",
-]
-
-# prometheus_client is a runtime dependency. When it is installed, mypy sees
-# both the real import and the ImportError stubs in metrics.py as conflicting
-# redefinitions. That dual-path fallback is intentional and out of scope to
-# rewrite for #121.
-[[tool.mypy.overrides]]
-module = "oracle_bridge.metrics"
-disable_error_code = ["misc"]
