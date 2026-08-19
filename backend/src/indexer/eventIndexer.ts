@@ -15,7 +15,7 @@
 import { withRetry } from '../common/retry';
 import { Store } from '../db/database';
 import { paginateEvents, SorobanRpcClient } from '../chain/rpcClient';
-
+import { logger } from '../common/logger';
 export interface IndexerTarget {
   contractId: string;
   eventType: string;
@@ -97,7 +97,7 @@ export class EventIndexer {
         } catch (err) {
           this.lastError = err instanceof Error ? err.message : String(err);
           // eslint-disable-next-line no-console
-          console.error('[indexer] tick error:', err);
+          logger.error({ err }, '[indexer] tick error');
         }
         this.scheduleTick();
       })();

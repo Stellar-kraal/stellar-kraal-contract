@@ -18,7 +18,7 @@ import { EventIndexer, IndexerTarget } from './indexer/eventIndexer';
 import { marketplaceRoutes } from './marketplace/routes';
 import { WebhookDeliveryService } from './webhook/deliveryService';
 import { webhookRoutes } from './webhook/routes';
-
+import {logger} from './common/logger'
 export interface AppDeps {
   store: Store;
   chain: ChainClient;
@@ -68,7 +68,7 @@ export function createApp(deps: Partial<AppDeps> = {}): App {
     ? new FailoverRateLimitStore(new RedisRateLimitStore(redis), memoryStore, (err) => {
         metrics.recordStoreFailover();
         // eslint-disable-next-line no-console
-        console.warn('rate limit store failing over to memory:', err);
+        logger.warn({ err }, 'rate limit store failing over to memory');
       })
     : memoryStore;
 
