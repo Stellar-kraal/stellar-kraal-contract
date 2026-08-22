@@ -52,6 +52,39 @@ class TestComputeBackoff:
         assert any(d != 1.0 for d in delays)
         assert all(0.0 <= d <= 1.5 for d in delays)
 
+    @pytest.mark.parametrize("attempt", list(range(21)))
+    def test_never_negative_across_all_attempts(self, attempt: int) -> None:
+        """compute_backoff must return >= 0.0 for every attempt 0–20 (seeded)."""
+        import random as _random
+        _random.seed(42)
+        config = RetryConfig(
+            base_delay_seconds=1.0,
+            max_delay_seconds=60.0,
+            jitter_factor=0.1,
+        )
+        result = compute_backoff(attempt, config)
+        assert result >= 0.0, (
+            f"compute_backoff({attempt}, config) returned {result!r}, expected >= 0.0"
+        )
+
+    def test_never_exceeds_max_delay_with_jitter(self) -> None:
+        """Result must never exceed max_delay_seconds * (1 + jitter_factor)."""
+        import random as _random
+        _random.seed(42)
+        config = RetryConfig(
+            base_delay_seconds=1.0,
+            max_delay_seconds=60.0,
+            jitter_factor=0.1,
+        )
+        upper_bound = config.max_delay_seconds * (1 + config.jitter_factor)
+        for attempt in range(21):
+            _random.seed(42)
+            result = compute_backoff(attempt, config)
+            assert result <= upper_bound, (
+                f"compute_backoff({attempt}, config) returned {result!r}, "
+                f"expected <= {upper_bound!r}"
+            )
+
 
 class TestRetry:
     def test_succeeds_on_first_try(self) -> None:
