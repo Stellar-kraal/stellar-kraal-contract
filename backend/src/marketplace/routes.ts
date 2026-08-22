@@ -1,67 +1,106 @@
-import { Router } from 'express';
-import { IdempotencyDeps, idempotent } from '../middleware/idempotency';
-import { MarketplaceService } from './service';
+import { Router } from "express";
+import { ListingRow } from "../db/database";
+import { IdempotencyDeps, idempotent } from "../middleware/idempotency";
+import { MarketplaceService } from "./service";
 
 function isPositiveInt(v: unknown): v is number {
-  return typeof v === 'number' && Number.isInteger(v) && v > 0;
+  return typeof v === "number" && Number.isInteger(v) && v > 0;
 }
 function isNonEmptyString(v: unknown): v is string {
-  return typeof v === 'string' && v.length > 0;
+  return typeof v === "string" && v.length > 0;
+}
+
+function isValidListingId(v: unknown): v is string {
+  return (
+    typeof v === "string" &&
+    v.trim().length > 0 &&
+    Array.from(v).every((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint >= 0x20 && codePoint !== 0x7f;
+    })
+  );
+}
+
+function listingResponse(row: ListingRow) {
+  return {
+    listingId: row.id,
+    sellerId: row.seller_id,
+    creditBatchId: row.credit_batch_id,
+    quantity: row.quantity_total,
+    quantityRemaining: row.quantity_remaining,
+    priceStroops: row.price_stroops,
+    createdAt: row.created_at,
+  };
 }
 
 export function validateCreateListing(body: unknown): string | null {
   const b = body as Record<string, unknown> | null;
-  if (!b || typeof b !== 'object') return 'request body must be a JSON object';
-  if (!isNonEmptyString(b.sellerId)) return 'sellerId is required';
-  if (!isNonEmptyString(b.creditBatchId)) return 'creditBatchId is required';
-  if (!isPositiveInt(b.quantity)) return 'quantity must be a positive integer';
-  if (!isPositiveInt(b.priceStroops)) return 'priceStroops must be a positive integer';
+  if (!b || typeof b !== "object") return "request body must be a JSON object";
+  if (!isNonEmptyString(b.sellerId)) return "sellerId is required";
+  if (!isNonEmptyString(b.creditBatchId)) return "creditBatchId is required";
+  if (!isPositiveInt(b.quantity)) return "quantity must be a positive integer";
+  if (!isPositiveInt(b.priceStroops))
+    return "priceStroops must be a positive integer";
   return null;
 }
 
 export function validatePurchase(body: unknown): string | null {
   const b = body as Record<string, unknown> | null;
-  if (!b || typeof b !== 'object') return 'request body must be a JSON object';
-  if (!isNonEmptyString(b.buyerId)) return 'buyerId is required';
-  if (!isNonEmptyString(b.listingId)) return 'listingId is required';
-  if (!isPositiveInt(b.quantity)) return 'quantity must be a positive integer';
+  if (!b || typeof b !== "object") return "request body must be a JSON object";
+  if (!isNonEmptyString(b.buyerId)) return "buyerId is required";
+  if (!isNonEmptyString(b.listingId)) return "listingId is required";
+  if (!isPositiveInt(b.quantity)) return "quantity must be a positive integer";
   return null;
 }
 
 export function marketplaceRoutes(deps: IdempotencyDeps): Router {
-  const service = new MarketplaceService(deps.store, deps.chain, deps.config.now);
+  const service = new MarketplaceService(
+    deps.store,
+    deps.chain,
+    deps.config.now,
+  );
   const router = Router();
 
   // Public browse endpoint (scrape target — rate limited per config).
-  router.get('/listings', (_req, res) => {
-    const listings = deps.store.listListings().map((l) => ({
-      listingId: l.id,
-      sellerId: l.seller_id,
-      creditBatchId: l.credit_batch_id,
-      quantity: l.quantity_total,
-      quantityRemaining: l.quantity_remaining,
-      priceStroops: l.price_stroops,
-      createdAt: l.created_at,
-    }));
+  router.get("/listings", (_req, res) => {
+    const listings = deps.store.listListings().map(listingResponse);
     res.json({ listings });
+  });
+
+  router.get("/listings/:id", (req, res) => {
+    const { id } = req.params;
+    if (!isValidListingId(id)) {
+      res
+        .status(400)
+        .json({ error: "id path parameter must be a non-empty string" });
+      return;
+    }
+
+    const listing = deps.store.getListing(id);
+    if (!listing) {
+      res.status(404).json({ error: "listing not found" });
+      return;
+    }
+
+    res.json(listingResponse(listing));
   });
 
   // Public price query. Backed by the oracle feed in production; served
   // from the simulated feed here. Classified as an expensive on-chain read
   // for rate-limiting purposes.
-  router.get('/prices', (_req, res) => {
+  router.get("/prices", (_req, res) => {
     res.json({
-      pair: 'CARBON/XLM',
+      pair: "CARBON/XLM",
       priceStroops: 5_000_000,
-      source: 'simulated-oracle',
+      source: "simulated-oracle",
       updatedAt: deps.config.now(),
     });
   });
 
   router.post(
-    '/listings',
+    "/listings",
     idempotent(deps, {
-      endpoint: 'POST /marketplace/listings',
+      endpoint: "POST /marketplace/listings",
       validate: validateCreateListing,
       execute: (body, key) => service.createListing(body, key),
       reconcile: (event) => service.reconcileListing(event),
@@ -69,9 +108,9 @@ export function marketplaceRoutes(deps: IdempotencyDeps): Router {
   );
 
   router.post(
-    '/purchases',
+    "/purchases",
     idempotent(deps, {
-      endpoint: 'POST /marketplace/purchases',
+      endpoint: "POST /marketplace/purchases",
       validate: validatePurchase,
       execute: (body, key) => service.purchase(body, key),
       reconcile: (event) => service.reconcilePurchase(event),
