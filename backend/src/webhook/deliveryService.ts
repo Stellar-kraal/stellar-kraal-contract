@@ -24,6 +24,8 @@ export interface WebhookDeliveryOptions {
   now?: () => number;
   /** Injectable HTTP poster for tests. Default: real fetch. */
   poster?: HttpPoster;
+  /** Timeout (ms) for the real HTTP poster's outbound request. Default: 10,000. */
+  timeoutMs?: number;
 }
 
 export interface HttpPoster {
@@ -63,8 +65,12 @@ export class WebhookDeliveryService {
     return this.options.maxAttempts ?? 5;
   }
 
+  private get timeoutMs(): number {
+    return this.options.timeoutMs ?? 10_000;
+  }
+
   private get poster(): HttpPoster {
-    return this.options.poster ?? fetchPoster;
+    return this.options.poster ?? makeFetchPoster(this.timeoutMs);
   }
 
   start(): void {
@@ -186,14 +192,16 @@ export class WebhookDeliveryService {
 
 // ── Real HTTP poster using Node built-in fetch ──────────────────────────────
 
-const fetchPoster: HttpPoster = {
-  async post(url, body, headers) {
-    const res = await fetch(url, {
-      method: 'POST',
-      body,
-      headers,
-      signal: AbortSignal.timeout(10_000),
-    });
-    return { status: res.status, ok: res.ok };
-  },
-};
+function makeFetchPoster(timeoutMs: number): HttpPoster {
+  return {
+    async post(url, body, headers) {
+      const res = await fetch(url, {
+        method: 'POST',
+        body,
+        headers,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      return { status: res.status, ok: res.ok };
+    },
+  };
+}
