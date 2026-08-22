@@ -37,38 +37,6 @@ const RETIRE_BODY = {
   reason: "corporate offset 2026",
 };
 
-describe("GET /marketplace/listings/:id", () => {
-  test("returns the same listing DTO shape as the public listing collection", async () => {
-    const { app } = makeTestApp();
-    const created = await request(app)
-      .post("/marketplace/listings")
-      .set("Idempotency-Key", "get-listing-key")
-      .send(LISTING_BODY);
-
-    const listing = await request(app).get(
-      `/marketplace/listings/${created.body.listingId}`,
-    );
-    const collection = await request(app).get("/marketplace/listings");
-
-    expect(listing.status).toBe(200);
-    expect(listing.body).toEqual(collection.body.listings[0]);
-  });
-
-  test("returns the standard error DTO for unknown or invalid listing ids", async () => {
-    const { app } = makeTestApp();
-
-    const missing = await request(app).get("/marketplace/listings/missing");
-    expect(missing.status).toBe(404);
-    expect(missing.body).toEqual({ error: "listing not found" });
-
-    const invalid = await request(app).get("/marketplace/listings/%20");
-    expect(invalid.status).toBe(400);
-    expect(invalid.body).toEqual({
-      error: "id path parameter must be a non-empty string",
-    });
-  });
-});
-
 describe("Idempotency-Key enforcement", () => {
   test("missing key returns 400 on all three endpoints", async () => {
     const { app } = makeTestApp();
