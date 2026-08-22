@@ -1,16 +1,7 @@
 import { Router } from "express";
+import { ListingRow } from "../db/database";
 import { IdempotencyDeps, idempotent } from "../middleware/idempotency";
 import { MarketplaceService } from "./service";
-import {
-  LISTING_PAGINATION_DEFAULTS,
-  LISTING_PAGINATION_MAX_LIMIT,
-  LISTING_PAGINATION_MIN_LIMIT,
-  LISTING_PAGINATION_MIN_OFFSET,
-  ListingPagination,
-  ListingPaginationQueryParser,
-  PaginationParseResult,
-} from "./contracts/listingPagination";
-import { ListListingsUseCase } from "./useCases/listListings";
 
 function isPositiveInt(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v) && v > 0;
@@ -19,71 +10,27 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;
 }
 
-const STRICT_NONNEGATIVE_INT = /^\d+$/;
+function isValidListingId(v: unknown): v is string {
+  return (
+    typeof v === "string" &&
+    v.trim().length > 0 &&
+    Array.from(v).every((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint >= 0x20 && codePoint !== 0x7f;
+    })
+  );
+}
 
-/**
- * HTTP-boundary DTO parser for `GET /marketplace/listings`. Rejects anything
- * that is not a single, strictly-formatted non-negative integer string.
- */
-class DefaultListingPaginationQueryParser implements ListingPaginationQueryParser {
-  parse(query: unknown): PaginationParseResult {
-    if (query === null || typeof query !== "object") {
-      return { error: "query must be an object" };
-    }
-    const q = query as Record<string, unknown>;
-    const allowedKeys = new Set(["limit", "offset"]);
-    for (const key of Object.keys(q)) {
-      if (!allowedKeys.has(key)) {
-        return { error: `unknown query parameter: ${key}` };
-      }
-    }
-
-    const limit = this.parseField(
-      q.limit,
-      "limit",
-      LISTING_PAGINATION_MIN_LIMIT,
-      LISTING_PAGINATION_MAX_LIMIT,
-      LISTING_PAGINATION_DEFAULTS.limit,
-    );
-    if ("error" in limit) return limit;
-
-    const offset = this.parseField(
-      q.offset,
-      "offset",
-      LISTING_PAGINATION_MIN_OFFSET,
-      Number.MAX_SAFE_INTEGER,
-      LISTING_PAGINATION_DEFAULTS.offset,
-    );
-    if ("error" in offset) return offset;
-
-    const value: ListingPagination = {
-      limit: limit.value,
-      offset: offset.value,
-    };
-    return { value };
-  }
-
-  private parseField(
-    raw: unknown,
-    field: string,
-    min: number,
-    max: number,
-    fallback: number,
-  ): { value: number } | { error: string } {
-    if (raw === undefined) return { value: fallback };
-    if (Array.isArray(raw)) return { error: `${field} must not be repeated` };
-    if (typeof raw !== "string" || !STRICT_NONNEGATIVE_INT.test(raw)) {
-      return { error: `${field} must be a non-negative integer` };
-    }
-    const num = Number(raw);
-    if (!Number.isSafeInteger(num)) {
-      return { error: `${field} is not a safe integer` };
-    }
-    if (num < min || num > max) {
-      return { error: `${field} must be between ${min} and ${max}` };
-    }
-    return { value: num };
-  }
+function listingResponse(row: ListingRow) {
+  return {
+    listingId: row.id,
+    sellerId: row.seller_id,
+    creditBatchId: row.credit_batch_id,
+    quantity: row.quantity_total,
+    quantityRemaining: row.quantity_remaining,
+    priceStroops: row.price_stroops,
+    createdAt: row.created_at,
+  };
 }
 
 export function validateCreateListing(body: unknown): string | null {
@@ -112,30 +59,30 @@ export function marketplaceRoutes(deps: IdempotencyDeps): Router {
     deps.chain,
     deps.config.now,
   );
-  const paginationParser = new DefaultListingPaginationQueryParser();
-  const listListingsUseCase = new ListListingsUseCase(deps.store);
   const router = Router();
 
   // Public browse endpoint (scrape target — rate limited per config).
-  router.get("/listings", (req, res) => {
-    const parsed = paginationParser.parse(req.query);
-    if (parsed.error || !parsed.value) {
+  router.get("/listings", (_req, res) => {
+    const listings = deps.store.listListings().map(listingResponse);
+    res.json({ listings });
+  });
+
+  router.get("/listings/:id", (req, res) => {
+    const { id } = req.params;
+    if (!isValidListingId(id)) {
       res
         .status(400)
-        .json({ error: parsed.error ?? "invalid pagination parameters" });
+        .json({ error: "id path parameter must be a non-empty string" });
       return;
     }
 
-    const listings = listListingsUseCase.execute(parsed.value).map((l) => ({
-      listingId: l.id,
-      sellerId: l.sellerId,
-      creditBatchId: l.creditBatchId,
-      quantity: l.quantity,
-      quantityRemaining: l.quantityRemaining,
-      priceStroops: l.priceStroops,
-      createdAt: l.createdAt,
-    }));
-    res.json({ listings });
+    const listing = deps.store.getListing(id);
+    if (!listing) {
+      res.status(404).json({ error: "listing not found" });
+      return;
+    }
+
+    res.json(listingResponse(listing));
   });
 
   // Public price query. Backed by the oracle feed in production; served
