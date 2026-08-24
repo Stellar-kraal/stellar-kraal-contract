@@ -26,7 +26,10 @@ extern crate std;
 
 use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
-use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, Bytes, BytesN, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Bytes, BytesN, Env,
+};
 
 use crate::{
     CarbonOracle, CarbonOracleClient, CommitmentState, Error, HEARTBEAT_EXPIRY_SECONDS,
@@ -243,7 +246,11 @@ fn ipfs_cid_empty_when_not_provided() {
     f.submit_ok(1_000, 1_720_000_000, None, None, None, None, None);
 
     let entry = f.client.get_price(&n32(&f.env, &f.feed_id));
-    assert_eq!(entry.ipfs_cid.len(), 0, "CID should be empty when not provided");
+    assert_eq!(
+        entry.ipfs_cid.len(),
+        0,
+        "CID should be empty when not provided"
+    );
 }
 
 #[test]
@@ -323,8 +330,7 @@ fn tampered_schema_version_rejected() {
     let ts: i64 = 1_720_051_200;
 
     // Build payload with a WRONG schema_version byte (e.g., 0xFF).
-    let mut payload =
-        build_payload_bytes(&f.script_hash, &f.input_params_hash, ov, ts, &f.feed_id);
+    let mut payload = build_payload_bytes(&f.script_hash, &f.input_params_hash, ov, ts, &f.feed_id);
     payload[0] = 0xFF; // wrong schema version
 
     let sig = sign_payload(&f.signing_key, &payload);

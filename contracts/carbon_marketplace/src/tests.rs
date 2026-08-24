@@ -1,7 +1,9 @@
 #![cfg(test)]
 
 use crate::*;
-use soroban_sdk::{symbol_short, testutils::Address as _, testutils::Ledger as _, Address, BytesN, Env};
+use soroban_sdk::{
+    symbol_short, testutils::Address as _, testutils::Ledger as _, Address, BytesN, Env,
+};
 
 fn make_env() -> Env {
     let env = Env::default();
@@ -571,8 +573,16 @@ fn test_poc_create_listing_id_collision_same_ledger() {
     let l1_after = ctx.market_client.get_listing(&listing_id_1);
     let l2_after = ctx.market_client.get_listing(&listing_id_2);
 
-    assert_eq!(l1_after.status, ListingStatus::Sold, "Listing 1 must be Sold after purchase");
-    assert_eq!(l2_after.status, ListingStatus::Sold, "Listing 2 must be Sold after purchase");
+    assert_eq!(
+        l1_after.status,
+        ListingStatus::Sold,
+        "Listing 1 must be Sold after purchase"
+    );
+    assert_eq!(
+        l2_after.status,
+        ListingStatus::Sold,
+        "Listing 2 must be Sold after purchase"
+    );
 
     assert_eq!(
         ctx.credit_client.balance_of(&buyer_1, &project_id),
@@ -600,12 +610,12 @@ fn test_poc_create_listing_different_prices_unique_ids() {
     let seller = Address::generate(&env);
     let project_id = setup_project_with_credits(&ctx, &seller, 10000, 2000);
 
-    let listing_id_high = ctx
-        .market_client
-        .create_listing(&seller, &project_id, &100_i128, &50_i128); // 50/credit
+    let listing_id_high =
+        ctx.market_client
+            .create_listing(&seller, &project_id, &100_i128, &50_i128); // 50/credit
     let listing_id_low = ctx
         .market_client
-        .create_listing(&seller, &project_id, &100_i128, &1_i128);  // 1/credit
+        .create_listing(&seller, &project_id, &100_i128, &1_i128); // 1/credit
 
     assert_ne!(
         listing_id_high, listing_id_low,
@@ -615,8 +625,14 @@ fn test_poc_create_listing_different_prices_unique_ids() {
     let l_high = ctx.market_client.get_listing(&listing_id_high);
     let l_low = ctx.market_client.get_listing(&listing_id_low);
 
-    assert_eq!(l_high.price_per_credit, 50, "High-price listing must retain its price");
-    assert_eq!(l_low.price_per_credit, 1, "Low-price listing must retain its price");
+    assert_eq!(
+        l_high.price_per_credit, 50,
+        "High-price listing must retain its price"
+    );
+    assert_eq!(
+        l_low.price_per_credit, 1,
+        "Low-price listing must retain its price"
+    );
 }
 
 /// PoC — RS-03: demonstrates that without ledger-bound enforcement a purchase

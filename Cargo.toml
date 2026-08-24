@@ -5,6 +5,7 @@ members = [
     "contracts/carbon_oracle",
     "contracts/carbon_registry",
     "contracts/carbon_credit",
+    "contracts/carbon_credit/fuzz",
     "contracts/carbon_marketplace",
     "contracts/carbon_timelock",
 ]

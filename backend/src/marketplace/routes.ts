@@ -1,4 +1,13 @@
 import { Router } from "express";
+import {
+  LISTING_PAGINATION_DEFAULTS,
+  LISTING_PAGINATION_MAX_LIMIT,
+  LISTING_PAGINATION_MIN_LIMIT,
+  LISTING_PAGINATION_MIN_OFFSET,
+  ListingPagination,
+  PaginationParseResult,
+} from "./contracts/listingPagination";
+import { ListingReadModel } from "./contracts/listingReadModel";
 import { ListingRow } from "../db/database";
 import { IdempotencyDeps, idempotent } from "../middleware/idempotency";
 import { MarketplaceService } from "./service";
@@ -33,6 +42,71 @@ function listingResponse(row: ListingRow) {
   };
 }
 
+function listingReadModelResponse(listing: ListingReadModel) {
+  return {
+    listingId: listing.id,
+    sellerId: listing.sellerId,
+    creditBatchId: listing.creditBatchId,
+    quantity: listing.quantity,
+    quantityRemaining: listing.quantityRemaining,
+    priceStroops: listing.priceStroops,
+    createdAt: listing.createdAt,
+  };
+}
+
+/**
+ * ADR-0112 query parsing for GET /marketplace/listings. Only `limit` and
+ * `offset` are accepted; each must be a canonical unsigned decimal integer
+ * within bounds. Rejects anything else so malformed pagination never reaches
+ * the store (unknown keys, repeated keys, signs, decimals, whitespace, etc.).
+ */
+function parseListingsPagination(query: unknown): PaginationParseResult {
+  if (typeof query !== "object" || query === null || Array.isArray(query)) {
+    return { error: "query must be an object" };
+  }
+  const record = query as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (key !== "limit" && key !== "offset") {
+      return { error: `unknown query parameter: ${key}` };
+    }
+  }
+
+  const value: ListingPagination = { ...LISTING_PAGINATION_DEFAULTS };
+  const parseParam = (
+    raw: unknown,
+    key: "limit" | "offset",
+    min: number,
+    max: number | null,
+  ): string | null => {
+    if (raw === undefined) return null;
+    if (typeof raw !== "string" || !/^\d+$/.test(raw)) {
+      return `${key} must be a non-negative integer`;
+    }
+    const n = Number(raw);
+    if (!Number.isSafeInteger(n) || n < min || (max !== null && n > max)) {
+      return `${key} is out of range`;
+    }
+    value[key] = n;
+    return null;
+  };
+
+  const limitError = parseParam(
+    record.limit,
+    "limit",
+    LISTING_PAGINATION_MIN_LIMIT,
+    LISTING_PAGINATION_MAX_LIMIT,
+  );
+  if (limitError) return { error: limitError };
+  const offsetError = parseParam(
+    record.offset,
+    "offset",
+    LISTING_PAGINATION_MIN_OFFSET,
+    null,
+  );
+  if (offsetError) return { error: offsetError };
+  return { value };
+}
+
 export function validateCreateListing(body: unknown): string | null {
   const b = body as Record<string, unknown> | null;
   if (!b || typeof b !== "object") return "request body must be a JSON object";
@@ -62,8 +136,16 @@ export function marketplaceRoutes(deps: IdempotencyDeps): Router {
   const router = Router();
 
   // Public browse endpoint (scrape target — rate limited per config).
-  router.get("/listings", (_req, res) => {
-    const listings = deps.store.listListings().map(listingResponse);
+  // Paginated per ADR-0112: limit (1..500) and offset, defaulting to 100/0.
+  router.get("/listings", (req, res) => {
+    const parsed = parseListingsPagination(req.query);
+    if (parsed.error) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    const listings = deps.store
+      .listListings(parsed.value!)
+      .map(listingReadModelResponse);
     res.json({ listings });
   });
 

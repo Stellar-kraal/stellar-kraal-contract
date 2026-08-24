@@ -46,6 +46,11 @@ use soroban_sdk::{
 const CONFIG: Symbol = symbol_short!("CONFIG");
 const CIRCUIT: Symbol = symbol_short!("CIRCUIT");
 
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
+
 /// Per-listing storage key: ("LST", listing_id)
 fn listing_key(e: &Env, id: &BytesN<32>) -> Val {
     (symbol_short!("LST"), id.clone()).into_val(e)
@@ -156,6 +161,12 @@ pub enum MarketError {
     /// RS-03 mitigation: the current ledger sequence exceeds the caller-supplied
     /// `max_ledger` deadline.  The purchase intent has expired.
     TransactionExpired = 11,
+    /// The marketplace circuit breaker is not in the Active state, so
+    /// price-dependent operations are rejected.
+    CircuitBreakerOpen = 12,
+    /// The configured oracle feed has not been refreshed within
+    /// `max_price_age_seconds`.
+    StalePriceFeed = 13,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -333,12 +344,11 @@ impl CarbonMarketplace {
 
         // 32 bytes: SHA256 of the serialized seller address
         let seller_val: soroban_sdk::Val = seller.clone().into_val(&e);
-        let seller_bytes: soroban_sdk::Bytes =
-            <soroban_sdk::Bytes as soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>::try_from_val(
-                &e,
-                &seller_val,
-            )
-            .unwrap_or_else(|_| soroban_sdk::Bytes::new(&e));
+        let seller_bytes: soroban_sdk::Bytes = <soroban_sdk::Bytes as soroban_sdk::TryFromVal<
+            Env,
+            soroban_sdk::Val,
+        >>::try_from_val(&e, &seller_val)
+        .unwrap_or_else(|_| soroban_sdk::Bytes::new(&e));
         let seller_hash: BytesN<32> = e.crypto().sha256(&seller_bytes).into();
         preimage.append(&soroban_sdk::Bytes::from_slice(&e, &seller_hash.to_array()));
 
