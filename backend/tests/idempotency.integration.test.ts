@@ -287,37 +287,32 @@ describe("TTL expiration", () => {
   });
 });
 
-<<<<<<< HEAD
-describe("business rejections are not cached", () => {
-  test("rejected purchase leaves no chain event and frees the key", async () => {
-=======
-describe('config.now() consistency', () => {
-  test('created_at and expires_at reflect a single now() read, even if the clock advances mid-request', async () => {
+describe("config.now() consistency", () => {
+  test("created_at and expires_at reflect a single now() read, even if the clock advances mid-request", async () => {
     // Clock advances by 1 on every read. If the middleware read config.now()
     // more than once per request (e.g. once up front and again inside
     // store.completeRecord), created_at and expires_at would be stamped
     // from different reads and expires_at - created_at would drift from TTL.
     let clock = 1_700_000_000;
     const config = { idempotencyTtlSeconds: TTL, now: () => clock++ };
-    const store = new Store(':memory:');
+    const store = new Store(":memory:");
     const chain = new SimulatedChainClient(store, config.now);
     const { app } = createApp({ store, chain, config });
 
     const res = await request(app)
-      .post('/credits/retire')
-      .set('Idempotency-Key', 'clock-key')
+      .post("/credits/retire")
+      .set("Idempotency-Key", "clock-key")
       .send(RETIRE_BODY);
     expect(res.status).toBe(201);
 
-    const record = store.getRecord('clock-key');
+    const record = store.getRecord("clock-key");
     expect(record).toBeDefined();
     expect(record!.expires_at - record!.created_at).toBe(TTL);
   });
 });
 
-describe('business rejections are not cached', () => {
-  test('rejected purchase leaves no chain event and frees the key', async () => {
->>>>>>> upstream/main
+describe("business rejections are not cached", () => {
+  test("rejected purchase leaves no chain event and frees the key", async () => {
     const { app, chain } = makeTestApp();
 
     const listing = await request(app)
