@@ -45,6 +45,16 @@ use soroban_sdk::{
 
 const CONFIG: Symbol = symbol_short!("CONFIG");
 const CIRCUIT: Symbol = symbol_short!("CIRCUIT");
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
+
+// Storage TTL bump parameters (aligned with sibling carbon_* contracts).
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
 
 const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
 const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
@@ -161,11 +171,10 @@ pub enum MarketError {
     /// RS-03 mitigation: the current ledger sequence exceeds the caller-supplied
     /// `max_ledger` deadline.  The purchase intent has expired.
     TransactionExpired = 11,
-    /// The marketplace circuit breaker is not in the Active state, so
-    /// price-dependent operations are rejected.
+    /// The market (or the upstream price oracle) circuit breaker is open —
+    /// price-dependent operations are paused.
     CircuitBreakerOpen = 12,
-    /// The configured oracle feed has not been refreshed within
-    /// `max_price_age_seconds`.
+    /// The upstream oracle price feed is older than `max_price_age_seconds`.
     StalePriceFeed = 13,
 }
 

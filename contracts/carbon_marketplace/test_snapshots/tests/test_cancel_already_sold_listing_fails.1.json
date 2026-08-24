@@ -312,7 +312,7 @@
             },
             "ext": "v0"
           },
-          4095
+          103680
         ]
       ],
       [
@@ -424,7 +424,7 @@
             },
             "ext": "v0"
           },
-          4095
+          69120
         ]
       ],
       [
@@ -590,7 +590,7 @@
             },
             "ext": "v0"
           },
-          4095
+          103680
         ]
       ],
       [
@@ -648,61 +648,7 @@
             },
             "ext": "v0"
           },
-          4095
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "BAL"
-                },
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                },
-                {
-                  "bytes": "6491423f61a65a0dbadab52f4feed1a585960dd876f670e503b745eaae76d2aa"
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "BAL"
-                    },
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                    },
-                    {
-                      "bytes": "6491423f61a65a0dbadab52f4feed1a585960dd876f670e503b745eaae76d2aa"
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 0
-                  }
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          4095
+          69120
         ]
       ],
       [
@@ -756,7 +702,7 @@
             },
             "ext": "v0"
           },
-          4095
+          103680
         ]
       ],
       [
@@ -804,7 +750,7 @@
             },
             "ext": "v0"
           },
-          4095
+          103680
         ]
       ],
       [
@@ -870,7 +816,7 @@
             },
             "ext": "v0"
           },
-          4095
+          69120
         ]
       ],
       [
@@ -990,7 +936,7 @@
             },
             "ext": "v0"
           },
-          4095
+          69120
         ]
       ]
     ]

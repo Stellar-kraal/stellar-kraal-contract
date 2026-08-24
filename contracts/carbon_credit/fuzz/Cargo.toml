@@ -4,6 +4,13 @@ version = "0.0.0"
 publish = false
 edition = "2021"
 
+[workspace]
+# Standalone cargo-fuzz workspace: keeps the wasm-oriented release profile
+# (lto = true, codegen-units = 1, strip = "symbols") pinned at the root
+# workspace out of this crate's build — that combination corrupts
+# ASan sancov symbol generation ("undefined symbol: __sancov_gen_*") when
+# inherited into a sanitizer build.
+
 [package.metadata]
 cargo-fuzz = true
 

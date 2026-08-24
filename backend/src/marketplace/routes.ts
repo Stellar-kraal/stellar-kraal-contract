@@ -10,7 +10,10 @@ import {
 import { ListingReadModel } from "./contracts/listingReadModel";
 import { ListingRow } from "../db/database";
 import { IdempotencyDeps, idempotent } from "../middleware/idempotency";
+import { ExpressListingPaginationQueryParser } from "./adapters/listingPaginationQueryParser";
+import { ListingReadModel } from "./contracts/listingReadModel";
 import { MarketplaceService } from "./service";
+import { ListListingsUseCase } from "./useCases/listListings";
 
 function isPositiveInt(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v) && v > 0;
@@ -42,69 +45,16 @@ function listingResponse(row: ListingRow) {
   };
 }
 
-function listingReadModelResponse(listing: ListingReadModel) {
+function listingReadModelResponse(model: ListingReadModel) {
   return {
-    listingId: listing.id,
-    sellerId: listing.sellerId,
-    creditBatchId: listing.creditBatchId,
-    quantity: listing.quantity,
-    quantityRemaining: listing.quantityRemaining,
-    priceStroops: listing.priceStroops,
-    createdAt: listing.createdAt,
+    listingId: model.id,
+    sellerId: model.sellerId,
+    creditBatchId: model.creditBatchId,
+    quantity: model.quantity,
+    quantityRemaining: model.quantityRemaining,
+    priceStroops: model.priceStroops,
+    createdAt: model.createdAt,
   };
-}
-
-/**
- * ADR-0112 query parsing for GET /marketplace/listings. Only `limit` and
- * `offset` are accepted; each must be a canonical unsigned decimal integer
- * within bounds. Rejects anything else so malformed pagination never reaches
- * the store (unknown keys, repeated keys, signs, decimals, whitespace, etc.).
- */
-function parseListingsPagination(query: unknown): PaginationParseResult {
-  if (typeof query !== "object" || query === null || Array.isArray(query)) {
-    return { error: "query must be an object" };
-  }
-  const record = query as Record<string, unknown>;
-  for (const key of Object.keys(record)) {
-    if (key !== "limit" && key !== "offset") {
-      return { error: `unknown query parameter: ${key}` };
-    }
-  }
-
-  const value: ListingPagination = { ...LISTING_PAGINATION_DEFAULTS };
-  const parseParam = (
-    raw: unknown,
-    key: "limit" | "offset",
-    min: number,
-    max: number | null,
-  ): string | null => {
-    if (raw === undefined) return null;
-    if (typeof raw !== "string" || !/^\d+$/.test(raw)) {
-      return `${key} must be a non-negative integer`;
-    }
-    const n = Number(raw);
-    if (!Number.isSafeInteger(n) || n < min || (max !== null && n > max)) {
-      return `${key} is out of range`;
-    }
-    value[key] = n;
-    return null;
-  };
-
-  const limitError = parseParam(
-    record.limit,
-    "limit",
-    LISTING_PAGINATION_MIN_LIMIT,
-    LISTING_PAGINATION_MAX_LIMIT,
-  );
-  if (limitError) return { error: limitError };
-  const offsetError = parseParam(
-    record.offset,
-    "offset",
-    LISTING_PAGINATION_MIN_OFFSET,
-    null,
-  );
-  if (offsetError) return { error: offsetError };
-  return { value };
 }
 
 export function validateCreateListing(body: unknown): string | null {
@@ -133,18 +83,23 @@ export function marketplaceRoutes(deps: IdempotencyDeps): Router {
     deps.chain,
     deps.config.now,
   );
+  const paginationParser = new ExpressListingPaginationQueryParser();
+  const listListingsUseCase = new ListListingsUseCase(deps.store);
   const router = Router();
 
   // Public browse endpoint (scrape target — rate limited per config).
-  // Paginated per ADR-0112: limit (1..500) and offset, defaulting to 100/0.
+  // ADR-0112 §3: query params are validated before the store is ever
+  // touched — a malformed/out-of-range/unknown param rejects with 400 and
+  // no read happens.
   router.get("/listings", (req, res) => {
-    const parsed = parseListingsPagination(req.query);
-    if (parsed.error) {
-      res.status(400).json({ error: parsed.error });
+    const parsed = paginationParser.parse(req.query);
+    if (parsed.error || !parsed.value) {
+      res.status(400).json({ error: parsed.error ?? "invalid query parameters" });
       return;
     }
-    const listings = deps.store
-      .listListings(parsed.value!)
+
+    const listings = listListingsUseCase
+      .execute(parsed.value)
       .map(listingReadModelResponse);
     res.json({ listings });
   });
