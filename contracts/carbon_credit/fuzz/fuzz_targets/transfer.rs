@@ -1,8 +1,8 @@
 #![no_main]
-use libfuzzer_sys::fuzz_target;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, symbol_short};
 use carbon_credit::{CarbonCredit, CarbonCreditClient};
 use carbon_registry::{CarbonRegistry, CarbonRegistryClient};
+use libfuzzer_sys::fuzz_target;
+use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
 
 #[derive(arbitrary::Arbitrary, Debug)]
 pub struct TransferInput {
@@ -19,7 +19,8 @@ fuzz_target!(|input: TransferInput| {
     reg_client.initialize(&reg_admin, &marketplace_addr);
 
     let owner = Address::generate(&env);
-    let project_id = reg_client.register_project(&owner, &symbol_short!("FUZZ"), &i128::MAX, &2024_u32);
+    let project_id =
+        reg_client.register_project(&owner, &symbol_short!("FUZZ"), &i128::MAX, &2024_u32);
     reg_client.verify_project(&project_id);
 
     let credit_client = CarbonCreditClient::new(&env, &env.register(CarbonCredit, ()));
@@ -38,17 +39,25 @@ fuzz_target!(|input: TransferInput| {
     for (from_idx, to_idx, amount) in input.actions {
         let from_acc = &accounts[(from_idx % 5) as usize];
         let to_acc = &accounts[(to_idx % 5) as usize];
-        
+
         let _res = credit_client.try_transfer(from_acc, to_acc, &project_id, &amount);
-        
+
         let current_supply = credit_client.total_supply(&project_id);
         // Invariant: transfer doesn't change total supply
-        assert_eq!(current_supply, initial_supply, "Invariant violated: total supply changed during transfer");
+        assert_eq!(
+            current_supply, initial_supply,
+            "Invariant violated: total supply changed during transfer"
+        );
 
         let mut sum_balances: i128 = 0;
         for acc in &accounts {
-            sum_balances = sum_balances.checked_add(credit_client.balance_of(acc, &project_id)).unwrap_or(sum_balances);
+            sum_balances = sum_balances
+                .checked_add(credit_client.balance_of(acc, &project_id))
+                .unwrap_or(sum_balances);
         }
-        assert_eq!(current_supply, sum_balances, "Invariant violated: total_supply != sum of balances");
+        assert_eq!(
+            current_supply, sum_balances,
+            "Invariant violated: total_supply != sum of balances"
+        );
     }
 });

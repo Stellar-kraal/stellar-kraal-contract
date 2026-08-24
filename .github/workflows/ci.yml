@@ -73,6 +73,13 @@ jobs:
 
   fuzzing:
     runs-on: ubuntu-latest
+    # The workspace release profile enables LTO + panic=abort to shrink the
+    # contract WASM; both break cargo-fuzz's sanitizer-coverage harness
+    # (undefined `__sancov_gen_*` symbols at link time, and process aborts
+    # instead of catchable panics), so the fuzz builds opt out of them.
+    env:
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_PANIC: "unwind"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install nightly Rust

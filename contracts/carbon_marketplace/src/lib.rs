@@ -56,6 +56,11 @@ const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
 const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
 const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
 
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
+
 /// Per-listing storage key: ("LST", listing_id)
 fn listing_key(e: &Env, id: &BytesN<32>) -> Val {
     (symbol_short!("LST"), id.clone()).into_val(e)
