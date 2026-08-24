@@ -46,6 +46,12 @@ use soroban_sdk::{
 const CONFIG: Symbol = symbol_short!("CONFIG");
 const CIRCUIT: Symbol = symbol_short!("CIRCUIT");
 
+// Storage TTL bump parameters (aligned with sibling carbon_* contracts).
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
+
 /// Per-listing storage key: ("LST", listing_id)
 fn listing_key(e: &Env, id: &BytesN<32>) -> Val {
     (symbol_short!("LST"), id.clone()).into_val(e)
@@ -156,6 +162,10 @@ pub enum MarketError {
     /// RS-03 mitigation: the current ledger sequence exceeds the caller-supplied
     /// `max_ledger` deadline.  The purchase intent has expired.
     TransactionExpired = 11,
+    /// Marketplace or linked oracle circuit breaker is not Active.
+    CircuitBreakerOpen = 12,
+    /// Configured oracle price feed exceeds `max_price_age_seconds`.
+    StalePriceFeed = 13,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
