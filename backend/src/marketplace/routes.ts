@@ -1,7 +1,10 @@
 import { Router } from "express";
 import { ListingRow } from "../db/database";
 import { IdempotencyDeps, idempotent } from "../middleware/idempotency";
+import { ExpressListingPaginationQueryParser } from "./adapters/listingPaginationQueryParser";
+import { ListingReadModel } from "./contracts/listingReadModel";
 import { MarketplaceService } from "./service";
+import { ListListingsUseCase } from "./useCases/listListings";
 
 function isPositiveInt(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v) && v > 0;
@@ -33,6 +36,18 @@ function listingResponse(row: ListingRow) {
   };
 }
 
+function listingReadModelResponse(model: ListingReadModel) {
+  return {
+    listingId: model.id,
+    sellerId: model.sellerId,
+    creditBatchId: model.creditBatchId,
+    quantity: model.quantity,
+    quantityRemaining: model.quantityRemaining,
+    priceStroops: model.priceStroops,
+    createdAt: model.createdAt,
+  };
+}
+
 export function validateCreateListing(body: unknown): string | null {
   const b = body as Record<string, unknown> | null;
   if (!b || typeof b !== "object") return "request body must be a JSON object";
@@ -59,11 +74,24 @@ export function marketplaceRoutes(deps: IdempotencyDeps): Router {
     deps.chain,
     deps.config.now,
   );
+  const paginationParser = new ExpressListingPaginationQueryParser();
+  const listListingsUseCase = new ListListingsUseCase(deps.store);
   const router = Router();
 
   // Public browse endpoint (scrape target — rate limited per config).
-  router.get("/listings", (_req, res) => {
-    const listings = deps.store.listListings().map(listingResponse);
+  // ADR-0112 §3: query params are validated before the store is ever
+  // touched — a malformed/out-of-range/unknown param rejects with 400 and
+  // no read happens.
+  router.get("/listings", (req, res) => {
+    const parsed = paginationParser.parse(req.query);
+    if (parsed.error || !parsed.value) {
+      res.status(400).json({ error: parsed.error ?? "invalid query parameters" });
+      return;
+    }
+
+    const listings = listListingsUseCase
+      .execute(parsed.value)
+      .map(listingReadModelResponse);
     res.json({ listings });
   });
 
