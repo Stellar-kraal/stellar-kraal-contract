@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sqlite3
 import tempfile
 import time
@@ -51,6 +52,77 @@ class TestComputeBackoff:
         # With jitter_factor=0.5, delays should vary between 0.5 and 1.5
         assert any(d != 1.0 for d in delays)
         assert all(0.0 <= d <= 1.5 for d in delays)
+
+    @pytest.mark.parametrize("attempt", range(0, 21))
+    def test_never_negative_across_attempts(self, attempt: int) -> None:
+        """delay is never negative, even for large attempt counts where the
+        exponential term would otherwise dwarf the jitter subtraction."""
+        random.seed(42)
+        config = RetryConfig(
+            base_delay_seconds=1.0,
+            max_delay_seconds=60.0,
+            jitter_factor=0.5,
+        )
+        delay = compute_backoff(attempt, config)
+        assert delay >= 0.0
+
+    @pytest.mark.parametrize("attempt", range(0, 21))
+    def test_never_exceeds_max_delay_with_jitter(self, attempt: int) -> None:
+        """delay is bounded by max_delay_seconds * (1 + jitter_factor), since
+        the exponential term is capped at max_delay_seconds before jitter is
+        applied and jitter can add at most jitter_factor of that capped value."""
+        random.seed(42)
+        config = RetryConfig(
+            base_delay_seconds=1.0,
+            max_delay_seconds=60.0,
+            jitter_factor=0.3,
+        )
+        delay = compute_backoff(attempt, config)
+        assert delay <= config.max_delay_seconds * (1 + config.jitter_factor)
+
+    def test_bounded_across_seeded_random_states(self) -> None:
+        """Cross-check the invariants over many seeded random states and the
+        full 0-20 attempt range, so the bound isn't an artifact of one seed."""
+        config = RetryConfig(
+            base_delay_seconds=1.0,
+            max_delay_seconds=60.0,
+            jitter_factor=0.4,
+        )
+        upper_bound = config.max_delay_seconds * (1 + config.jitter_factor)
+        for seed in range(10):
+            random.seed(seed)
+            for attempt in range(0, 21):
+                delay = compute_backoff(attempt, config)
+                assert 0.0 <= delay <= upper_bound
+
+    def test_high_attempt_counts_stay_capped(self) -> None:
+        """At high attempt counts, 2**attempt vastly exceeds max_delay_seconds,
+        so the pre-jitter delay must be pinned at the cap rather than
+        overflowing or growing unbounded."""
+        random.seed(42)
+        config = RetryConfig(
+            base_delay_seconds=1.0,
+            max_delay_seconds=60.0,
+            jitter_factor=0.1,
+        )
+        for attempt in (15, 18, 20):
+            delay = compute_backoff(attempt, config)
+            assert 0.0 <= delay <= config.max_delay_seconds * (1 + config.jitter_factor)
+
+    def test_zero_jitter_factor_is_deterministic(self) -> None:
+        """With jitter_factor=0.0 the result is exactly the capped exponential
+        delay, regardless of random state."""
+        config = RetryConfig(
+            base_delay_seconds=2.0,
+            max_delay_seconds=50.0,
+            jitter_factor=0.0,
+        )
+        for seed in range(5):
+            random.seed(seed)
+            for attempt in range(0, 21):
+                delay = compute_backoff(attempt, config)
+                expected = min(config.base_delay_seconds * (2 ** attempt), config.max_delay_seconds)
+                assert delay == expected
 
 
 class TestRetry:

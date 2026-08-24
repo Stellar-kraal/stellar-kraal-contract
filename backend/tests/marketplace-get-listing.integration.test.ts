@@ -3,6 +3,7 @@ import request from "supertest";
 import { createApp } from "../src/app";
 import { SimulatedChainClient } from "../src/chain/chainClient";
 import { Store } from "../src/db/database";
+import { LISTING_PAGINATION_DEFAULTS } from "../src/marketplace/contracts/listingPagination";
 import {
   CREATE_LISTING_BODY,
   EXPECTED_LISTING_DTO_KEYS,
@@ -227,7 +228,7 @@ describe("GET /marketplace/listings/:id — 404 Not Found (valid but absent ids)
     // Assert
     expect(res.status).toBe(404);
     expect(res.body).toEqual(NOT_FOUND_DTO);
-    expect(store.listListings()).toHaveLength(1);
+    expect(store.listListings(LISTING_PAGINATION_DEFAULTS)).toHaveLength(1);
   });
 });
 
@@ -261,7 +262,7 @@ describe("GET /marketplace/listings/:id — 400 Bad Request (malformed ids)", ()
       expectExactErrorKeys(res.body);
 
       // Assert — rejection happens at the HTTP edge, before the Store/chain
-      expect(store.listListings()).toHaveLength(1);
+      expect(store.listListings(LISTING_PAGINATION_DEFAULTS)).toHaveLength(1);
       expect(chainEventCount(store)).toBe(chainBefore);
     },
   );
@@ -297,7 +298,7 @@ describe("GET /marketplace/listings/:id — hostile payloads", () => {
     // Assert — plain miss, standard contract, table fully intact
     expect(res.status).toBe(404);
     expect(res.body).toEqual(NOT_FOUND_DTO);
-    expect(store.listListings()).toHaveLength(1);
+    expect(store.listListings(LISTING_PAGINATION_DEFAULTS)).toHaveLength(1);
     expect(store.getListing(row.id)).toBeDefined();
 
     // Assert — a legitimate read still works afterwards (no corrupted state)
@@ -363,7 +364,7 @@ describe("GET /marketplace/listings/:id — read idempotency and consistency", (
 
     // Assert — zero state drift: same row, same listing count, no chain events
     expect(store.getListing(row.id)).toEqual(rowBefore);
-    expect(store.listListings()).toHaveLength(1);
+    expect(store.listListings(LISTING_PAGINATION_DEFAULTS)).toHaveLength(1);
     expect(chainEventCount(store)).toBe(chainBefore);
   });
 
@@ -385,7 +386,7 @@ describe("GET /marketplace/listings/:id — read idempotency and consistency", (
       expect(res.status).toBe(200);
       expect(res.body).toEqual(responses[0].body);
     }
-    expect(store.listListings()).toHaveLength(1);
+    expect(store.listListings(LISTING_PAGINATION_DEFAULTS)).toHaveLength(1);
   });
 
   test("an Idempotency-Key header on a GET is ignored — no record is persisted", async () => {
