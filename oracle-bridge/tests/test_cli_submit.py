@@ -72,13 +72,17 @@ class TestSubmitDryRun:
     def test_dry_run_json_output(
         self, gee_results_file: Path, capsys: pytest.CaptureFixture[str]
     ):
-        rc = main([
-            "submit",
-            "--feed-id", "CATTLE-SPOT",
-            "--results-file", str(gee_results_file),
-            "--dry-run",
-            "--json",
-        ])
+        rc = main(
+            [
+                "submit",
+                "--feed-id",
+                "CATTLE-SPOT",
+                "--results-file",
+                str(gee_results_file),
+                "--dry-run",
+                "--json",
+            ]
+        )
         assert rc == 0
 
         output = json.loads(capsys.readouterr().out)
@@ -94,12 +98,16 @@ class TestSubmitDryRun:
     def test_dry_run_human_output(
         self, gee_results_file: Path, capsys: pytest.CaptureFixture[str]
     ):
-        rc = main([
-            "submit",
-            "--feed-id", "CATTLE-SPOT",
-            "--results-file", str(gee_results_file),
-            "--dry-run",
-        ])
+        rc = main(
+            [
+                "submit",
+                "--feed-id",
+                "CATTLE-SPOT",
+                "--results-file",
+                str(gee_results_file),
+                "--dry-run",
+            ]
+        )
         assert rc == 0
         out = capsys.readouterr().out
         assert "DRY-RUN" in out
@@ -109,13 +117,17 @@ class TestSubmitDryRun:
     def test_dry_run_single_source(
         self, single_source_file: Path, capsys: pytest.CaptureFixture[str]
     ):
-        rc = main([
-            "submit",
-            "--feed-id", "carbon/rwanda/2024",
-            "--results-file", str(single_source_file),
-            "--dry-run",
-            "--json",
-        ])
+        rc = main(
+            [
+                "submit",
+                "--feed-id",
+                "carbon/rwanda/2024",
+                "--results-file",
+                str(single_source_file),
+                "--dry-run",
+                "--json",
+            ]
+        )
         assert rc == 0
         output = json.loads(capsys.readouterr().out)
         assert output["aggregate_value"] == 4_815_162_342
@@ -146,11 +158,17 @@ class TestSubmitDryRun:
         path = tmp_path / "outlier.json"
         path.write_text(json.dumps(results))
 
-        rc = main([
-            "submit", "--feed-id", "F",
-            "--results-file", str(path),
-            "--dry-run", "--json",
-        ])
+        rc = main(
+            [
+                "submit",
+                "--feed-id",
+                "F",
+                "--results-file",
+                str(path),
+                "--dry-run",
+                "--json",
+            ]
+        )
         assert rc == 0
         output = json.loads(capsys.readouterr().out)
         assert "outlier" in output["rejected_sources"]
@@ -158,43 +176,61 @@ class TestSubmitDryRun:
     def test_live_mode_not_implemented(
         self, gee_results_file: Path, capsys: pytest.CaptureFixture[str]
     ):
-        rc = main([
-            "submit",
-            "--feed-id", "CATTLE-SPOT",
-            "--results-file", str(gee_results_file),
-        ])
+        rc = main(
+            [
+                "submit",
+                "--feed-id",
+                "CATTLE-SPOT",
+                "--results-file",
+                str(gee_results_file),
+            ]
+        )
         assert rc == 1
         err = capsys.readouterr().err
         assert "not yet implemented" in err
 
     def test_missing_results_file(self, capsys):
-        rc = main([
-            "submit",
-            "--feed-id", "F",
-            "--results-file", "/nonexistent/results.json",
-            "--dry-run",
-        ])
+        rc = main(
+            [
+                "submit",
+                "--feed-id",
+                "F",
+                "--results-file",
+                "/nonexistent/results.json",
+                "--dry-run",
+            ]
+        )
         assert rc == 1
         assert "not found" in capsys.readouterr().err
 
     def test_invalid_json(self, tmp_path: Path, capsys):
         path = tmp_path / "bad.json"
         path.write_text("{not valid json")
-        rc = main([
-            "submit", "--feed-id", "F",
-            "--results-file", str(path),
-            "--dry-run",
-        ])
+        rc = main(
+            [
+                "submit",
+                "--feed-id",
+                "F",
+                "--results-file",
+                str(path),
+                "--dry-run",
+            ]
+        )
         assert rc == 1
         assert "Invalid JSON" in capsys.readouterr().err
 
     def test_empty_results_file(self, tmp_path: Path, capsys):
         path = tmp_path / "empty.json"
         path.write_text("{}")
-        rc = main([
-            "submit", "--feed-id", "F",
-            "--results-file", str(path),
-            "--dry-run",
-        ])
+        rc = main(
+            [
+                "submit",
+                "--feed-id",
+                "F",
+                "--results-file",
+                str(path),
+                "--dry-run",
+            ]
+        )
         assert rc == 1
         assert "No GEE results" in capsys.readouterr().err
