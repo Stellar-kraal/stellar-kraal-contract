@@ -247,9 +247,7 @@ fn test_initialize_zero_collateral_rejected() {
     let o1 = Address::generate(&env);
     let o2 = Address::generate(&env);
     let o3 = Address::generate(&env);
-    let res = client.try_initialize(
-        &admin, &o1, &o2, &o3, &0, &8_500, &500, &1_000, &0, &100,
-    );
+    let res = client.try_initialize(&admin, &o1, &o2, &o3, &0, &8_500, &500, &1_000, &0, &100);
     assert_eq!(res, Err(Ok(Error::InvalidConfig)));
 }
 
@@ -261,9 +259,7 @@ fn test_initialize_negative_collateral_rejected() {
     let o1 = Address::generate(&env);
     let o2 = Address::generate(&env);
     let o3 = Address::generate(&env);
-    let res = client.try_initialize(
-        &admin, &o1, &o2, &o3, &-1, &8_500, &500, &1_000, &0, &100,
-    );
+    let res = client.try_initialize(&admin, &o1, &o2, &o3, &-1, &8_500, &500, &1_000, &0, &100);
     assert_eq!(res, Err(Ok(Error::InvalidConfig)));
 }
 

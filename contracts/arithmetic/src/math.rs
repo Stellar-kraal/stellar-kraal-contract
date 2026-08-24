@@ -59,7 +59,9 @@ pub fn fixed_mul(a: i128, b: i128, scale: i128) -> Result<i128, ArithmeticError>
     }
     let product = a.checked_mul(b).ok_or(ArithmeticError::Overflow)?;
     // product is in scale^2 units; bring it back to scale units.
-    let scaled = product.checked_div(scale).ok_or(ArithmeticError::DivisionByZero)?;
+    let scaled = product
+        .checked_div(scale)
+        .ok_or(ArithmeticError::DivisionByZero)?;
     Ok(scaled)
 }
 
@@ -77,7 +79,9 @@ pub fn weighted_avg(
     let num = value
         .checked_mul(weight_numerator)
         .ok_or(ArithmeticError::Overflow)?;
-    let result = num.checked_div(weight_denominator).ok_or(ArithmeticError::DivisionByZero)?;
+    let result = num
+        .checked_div(weight_denominator)
+        .ok_or(ArithmeticError::DivisionByZero)?;
     Ok(result)
 }
 
@@ -93,7 +97,11 @@ pub fn fixed_add(a: i128, b: i128) -> Result<i128, ArithmeticError> {
 /// rejecting values that would exceed [`MAX_CREDIT_QUANTITY`].
 pub fn to_fixed(real: i128, scale: i128) -> Result<i128, ArithmeticError> {
     let fixed = real.checked_mul(scale).ok_or(ArithmeticError::Overflow)?;
-    if fixed > MAX_CREDIT_QUANTITY.checked_mul(scale).ok_or(ArithmeticError::Overflow)? {
+    if fixed
+        > MAX_CREDIT_QUANTITY
+            .checked_mul(scale)
+            .ok_or(ArithmeticError::Overflow)?
+    {
         return Err(ArithmeticError::OutOfRange);
     }
     Ok(fixed)
@@ -106,8 +114,12 @@ pub fn from_fixed(fixed: i128, scale: i128, tolerance: i128) -> Result<i128, Ari
     if scale <= 0 {
         return Err(ArithmeticError::DivisionByZero);
     }
-    let whole = fixed.checked_div(scale).ok_or(ArithmeticError::DivisionByZero)?;
-    let remainder = fixed.checked_rem(scale).ok_or(ArithmeticError::DivisionByZero)?;
+    let whole = fixed
+        .checked_div(scale)
+        .ok_or(ArithmeticError::DivisionByZero)?;
+    let remainder = fixed
+        .checked_rem(scale)
+        .ok_or(ArithmeticError::DivisionByZero)?;
     if remainder.abs() > tolerance {
         return Err(ArithmeticError::PrecisionLoss);
     }
@@ -151,7 +163,10 @@ mod tests {
 
     #[test]
     fn weighted_avg_rejects_zero_denominator() {
-        assert_eq!(weighted_avg(100, 1, 0), Err(ArithmeticError::DivisionByZero));
+        assert_eq!(
+            weighted_avg(100, 1, 0),
+            Err(ArithmeticError::DivisionByZero)
+        );
     }
 
     #[test]
@@ -183,7 +198,10 @@ mod tests {
         // 1.000001 -> whole 1, remainder 1 micro-unit, tolerance 2 -> ok
         assert_eq!(from_fixed(SCALE + 1, SCALE, 2), Ok(1));
         // remainder 5 micro-units, tolerance 0 -> precision loss
-        assert_eq!(from_fixed(SCALE + 5, SCALE, 0), Err(ArithmeticError::PrecisionLoss));
+        assert_eq!(
+            from_fixed(SCALE + 5, SCALE, 0),
+            Err(ArithmeticError::PrecisionLoss)
+        );
     }
 
     #[test]
