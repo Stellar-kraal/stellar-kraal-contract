@@ -348,7 +348,7 @@ fn setup_credit_with_project<'a>(
     env: &'a Env,
 ) -> (
     CarbonCreditClient<'a>,
-    Address,  // marketplace_addr (authorized minter)
+    Address,    // marketplace_addr (authorized minter)
     BytesN<32>, // project_id
 ) {
     use carbon_registry::{CarbonRegistry, CarbonRegistryClient};
@@ -404,8 +404,16 @@ fn test_poc_retire_replay_without_operation_id() {
     let balance_mid = credit_client.balance_of(&alice, &project_id);
     let retired_mid = credit_client.retired_supply(&project_id);
 
-    assert_eq!(balance_mid, balance_before - 100, "First retire must deduct 100");
-    assert_eq!(retired_mid, retired_before + 100, "First retire must add 100 to retired supply");
+    assert_eq!(
+        balance_mid,
+        balance_before - 100,
+        "First retire must deduct 100"
+    );
+    assert_eq!(
+        retired_mid,
+        retired_before + 100,
+        "First retire must add 100 to retired supply"
+    );
 
     // PoC: second call with SAME operation_id must be rejected (replay blocked).
     // Before the fix, this would retire another 100 credits, draining Alice's balance.
@@ -499,11 +507,7 @@ fn test_mitigation_retire_multiple_unique_operation_ids() {
     credit_client.mint(&alice, &project_id, &1000_i128);
 
     // Retire in three separate operations with unique ids
-    let op_ids: [[u8; 32]; 3] = [
-        [0x01_u8; 32],
-        [0x02_u8; 32],
-        [0x03_u8; 32],
-    ];
+    let op_ids: [[u8; 32]; 3] = [[0x01_u8; 32], [0x02_u8; 32], [0x03_u8; 32]];
     let amounts: [i128; 3] = [100, 200, 300];
     let mut total_retired = 0_i128;
 
