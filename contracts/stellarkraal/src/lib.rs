@@ -191,9 +191,7 @@ impl StellarKraal {
         if collateral_ratio_bps <= 0 || collateral_ratio_bps > 10_000 {
             return Err(Error::InvalidConfig);
         }
-        if liquidation_threshold_bps <= collateral_ratio_bps
-            || liquidation_threshold_bps > 10_000
-        {
+        if liquidation_threshold_bps <= collateral_ratio_bps || liquidation_threshold_bps > 10_000 {
             return Err(Error::InvalidConfig);
         }
 
