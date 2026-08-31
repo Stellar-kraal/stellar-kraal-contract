@@ -62,6 +62,7 @@ def configure_logging(
         format suitable for local development.
     """
     handler = logging.StreamHandler(sys.stdout)
+    formatter: logging.Formatter
     if structured:
         formatter = StructuredFormatter()
     else:

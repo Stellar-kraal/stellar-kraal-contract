@@ -1,7 +1,9 @@
 #![cfg(test)]
 
 use crate::*;
-use soroban_sdk::{symbol_short, testutils::Address as _, testutils::Ledger as _, Address, BytesN, Env};
+use soroban_sdk::{
+    symbol_short, testutils::Address as _, testutils::Ledger as _, Address, BytesN, Env,
+};
 
 fn make_env() -> Env {
     let env = Env::default();
@@ -571,8 +573,16 @@ fn test_poc_create_listing_id_collision_same_ledger() {
     let l1_after = ctx.market_client.get_listing(&listing_id_1);
     let l2_after = ctx.market_client.get_listing(&listing_id_2);
 
-    assert_eq!(l1_after.status, ListingStatus::Sold, "Listing 1 must be Sold after purchase");
-    assert_eq!(l2_after.status, ListingStatus::Sold, "Listing 2 must be Sold after purchase");
+    assert_eq!(
+        l1_after.status,
+        ListingStatus::Sold,
+        "Listing 1 must be Sold after purchase"
+    );
+    assert_eq!(
+        l2_after.status,
+        ListingStatus::Sold,
+        "Listing 2 must be Sold after purchase"
+    );
 
     assert_eq!(
         ctx.credit_client.balance_of(&buyer_1, &project_id),
@@ -600,12 +610,12 @@ fn test_poc_create_listing_different_prices_unique_ids() {
     let seller = Address::generate(&env);
     let project_id = setup_project_with_credits(&ctx, &seller, 10000, 2000);
 
-    let listing_id_high = ctx
-        .market_client
-        .create_listing(&seller, &project_id, &100_i128, &50_i128); // 50/credit
+    let listing_id_high =
+        ctx.market_client
+            .create_listing(&seller, &project_id, &100_i128, &50_i128); // 50/credit
     let listing_id_low = ctx
         .market_client
-        .create_listing(&seller, &project_id, &100_i128, &1_i128);  // 1/credit
+        .create_listing(&seller, &project_id, &100_i128, &1_i128); // 1/credit
 
     assert_ne!(
         listing_id_high, listing_id_low,
@@ -615,8 +625,14 @@ fn test_poc_create_listing_different_prices_unique_ids() {
     let l_high = ctx.market_client.get_listing(&listing_id_high);
     let l_low = ctx.market_client.get_listing(&listing_id_low);
 
-    assert_eq!(l_high.price_per_credit, 50, "High-price listing must retain its price");
-    assert_eq!(l_low.price_per_credit, 1, "Low-price listing must retain its price");
+    assert_eq!(
+        l_high.price_per_credit, 50,
+        "High-price listing must retain its price"
+    );
+    assert_eq!(
+        l_low.price_per_credit, 1,
+        "Low-price listing must retain its price"
+    );
 }
 
 /// PoC — RS-03: demonstrates that without ledger-bound enforcement a purchase
@@ -764,3 +780,157 @@ fn test_mitigation_purchase_listing_unbounded_max_ledger() {
     assert_eq!(listing.status, ListingStatus::Sold);
     assert_eq!(ctx.credit_client.balance_of(&buyer, &project_id), 100);
 }
+
+// ── Circuit breaker state-machine tests ───────────────────────────────────
+
+/// Trip the circuit breaker and verify `create_listing` is rejected.
+#[test]
+fn test_circuit_breaker_tripped_blocks_create_listing() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+
+    let seller = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 200);
+
+    // Default state is Active when CIRCUIT has never been written.
+    assert_eq!(
+        ctx.market_client.get_circuit_breaker_state(),
+        CircuitBreakerState::Active
+    );
+
+    ctx.market_client.set_circuit_breaker_state(
+        &ctx.admin,
+        &CircuitBreakerState::Tripped,
+    );
+    assert_eq!(
+        ctx.market_client.get_circuit_breaker_state(),
+        CircuitBreakerState::Tripped
+    );
+
+    let res = ctx
+        .market_client
+        .try_create_listing(&seller, &project_id, &50_i128, &10_i128);
+    assert_eq!(
+        res,
+        Err(Ok(MarketError::CircuitBreakerOpen)),
+        "create_listing must fail while circuit is Tripped"
+    );
+}
+
+/// Admin can resume operations after `AdminPaused` (and listings survive the pause).
+#[test]
+fn test_circuit_breaker_admin_resume_from_paused() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let project_id = setup_project_with_credits(&ctx, &seller, 1000, 100);
+
+    // Create listing while market is Active.
+    let listing_id = ctx
+        .market_client
+        .create_listing(&seller, &project_id, &10_i128, &5_i128);
+    let listing_before = ctx.market_client.get_listing(&listing_id);
+    assert_eq!(listing_before.status, ListingStatus::Active);
+    assert_eq!(listing_before.amount, 10);
+
+    // Admin pauses the market.
+    ctx.market_client.set_circuit_breaker_state(
+        &ctx.admin,
+        &CircuitBreakerState::AdminPaused,
+    );
+    assert_eq!(
+        ctx.market_client.get_circuit_breaker_state(),
+        CircuitBreakerState::AdminPaused
+    );
+
+    // Mutations blocked while paused.
+    let blocked = ctx
+        .market_client
+        .try_create_listing(&seller, &project_id, &5_i128, &5_i128);
+    assert_eq!(
+        blocked,
+        Err(Ok(MarketError::CircuitBreakerOpen)),
+        "create_listing must fail while AdminPaused"
+    );
+
+    // Existing listing state is preserved across the pause.
+    let listing_paused = ctx.market_client.get_listing(&listing_id);
+    assert_eq!(listing_paused.status, ListingStatus::Active);
+    assert_eq!(listing_paused.amount, 10);
+    assert_eq!(listing_paused.price_per_credit, 5);
+
+    // Admin resumes → Active.
+    ctx.market_client.set_circuit_breaker_state(
+        &ctx.admin,
+        &CircuitBreakerState::Active,
+    );
+    assert_eq!(
+        ctx.market_client.get_circuit_breaker_state(),
+        CircuitBreakerState::Active
+    );
+
+    // Purchase of the pre-pause listing succeeds after resume.
+    ctx.market_client
+        .purchase_listing(&buyer, &listing_id, &50_i128, &u32::MAX);
+    let listing_after = ctx.market_client.get_listing(&listing_id);
+    assert_eq!(listing_after.status, ListingStatus::Sold);
+    assert_eq!(ctx.credit_client.balance_of(&buyer, &project_id), 10);
+}
+
+/// Non-admin cannot reset / change the circuit breaker state.
+#[test]
+fn test_circuit_breaker_non_admin_cannot_reset() {
+    let env = make_env();
+    let ctx = setup_full(&env);
+
+    let stranger = Address::generate(&env);
+
+    // Non-admin cannot trip.
+    let trip = ctx.market_client.try_set_circuit_breaker_state(
+        &stranger,
+        &CircuitBreakerState::Tripped,
+    );
+    assert_eq!(
+        trip,
+        Err(Ok(MarketError::Unauthorized)),
+        "non-admin must not trip the circuit breaker"
+    );
+    assert_eq!(
+        ctx.market_client.get_circuit_breaker_state(),
+        CircuitBreakerState::Active
+    );
+
+    // Admin trips, then non-admin cannot reset back to Active.
+    ctx.market_client.set_circuit_breaker_state(
+        &ctx.admin,
+        &CircuitBreakerState::Tripped,
+    );
+    let reset = ctx.market_client.try_set_circuit_breaker_state(
+        &stranger,
+        &CircuitBreakerState::Active,
+    );
+    assert_eq!(
+        reset,
+        Err(Ok(MarketError::Unauthorized)),
+        "non-admin must not reset the circuit breaker"
+    );
+    assert_eq!(
+        ctx.market_client.get_circuit_breaker_state(),
+        CircuitBreakerState::Tripped,
+        "circuit must remain Tripped after unauthorized reset attempt"
+    );
+
+    // Admin can still reset.
+    ctx.market_client.set_circuit_breaker_state(
+        &ctx.admin,
+        &CircuitBreakerState::Active,
+    );
+    assert_eq!(
+        ctx.market_client.get_circuit_breaker_state(),
+        CircuitBreakerState::Active
+    );
+}
+
+

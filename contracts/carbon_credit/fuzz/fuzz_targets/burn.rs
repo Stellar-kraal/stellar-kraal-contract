@@ -1,8 +1,8 @@
 #![no_main]
-use libfuzzer_sys::fuzz_target;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, symbol_short};
 use carbon_credit::{CarbonCredit, CarbonCreditClient};
 use carbon_registry::{CarbonRegistry, CarbonRegistryClient};
+use libfuzzer_sys::fuzz_target;
+use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
 
 #[derive(arbitrary::Arbitrary, Debug)]
 pub struct BurnInput {
@@ -19,7 +19,8 @@ fuzz_target!(|input: BurnInput| {
     reg_client.initialize(&reg_admin, &marketplace_addr);
 
     let owner = Address::generate(&env);
-    let project_id = reg_client.register_project(&owner, &symbol_short!("FUZZ"), &i128::MAX, &2024_u32);
+    let project_id =
+        reg_client.register_project(&owner, &symbol_short!("FUZZ"), &i128::MAX, &2024_u32);
     reg_client.verify_project(&project_id);
 
     let credit_client = CarbonCreditClient::new(&env, &env.register(CarbonCredit, ()));
@@ -36,15 +37,15 @@ fuzz_target!(|input: BurnInput| {
 
     for (acc_idx, amount) in input.actions {
         let target_acc = &accounts[(acc_idx % 5) as usize];
-        
+
         let pre_balance = credit_client.balance_of(target_acc, &project_id);
         let pre_supply = credit_client.total_supply(&project_id);
-        
+
         let res = credit_client.try_burn(target_acc, &project_id, &amount);
-        
+
         let post_balance = credit_client.balance_of(target_acc, &project_id);
         let post_supply = credit_client.total_supply(&project_id);
-        
+
         if res.is_ok() {
             assert_eq!(post_balance, pre_balance - amount);
             assert_eq!(post_supply, pre_supply - amount);
@@ -52,8 +53,13 @@ fuzz_target!(|input: BurnInput| {
 
         let mut sum_balances: i128 = 0;
         for acc in &accounts {
-            sum_balances = sum_balances.checked_add(credit_client.balance_of(acc, &project_id)).unwrap_or(sum_balances);
+            sum_balances = sum_balances
+                .checked_add(credit_client.balance_of(acc, &project_id))
+                .unwrap_or(sum_balances);
         }
-        assert_eq!(post_supply, sum_balances, "Invariant violated: total_supply != sum of balances");
+        assert_eq!(
+            post_supply, sum_balances,
+            "Invariant violated: total_supply != sum of balances"
+        );
     }
 });

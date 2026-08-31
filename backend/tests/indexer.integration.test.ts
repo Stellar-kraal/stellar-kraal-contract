@@ -69,6 +69,12 @@ describe('signPayload', () => {
     const sig = signPayload('mysecret', '{"foo":"bar"}');
     expect(sig).toMatch(/^sha256=[0-9a-f]{64}$/);
   });
+  
+  test('matches the known HMAC-SHA256 test vector', () => {
+    expect(signPayload('secret', 'payload')).toBe(
+      'sha256=b82fcb791acec57859b989b430a826488ce2e479fdf92326bd0a2e8375a42ba4',
+    );
+  });
 
   test('different secrets produce different signatures', () => {
     const payload = '{"event":"test"}';
@@ -521,6 +527,60 @@ describe('Webhook delivery', () => {
     // Already delivered — should not re-deliver
     expect(callCount).toBe(1);
   });
+
+  test('poster timeout moves delivery to pending with incremented attempt_count', async () => {
+    let callCount = 0;
+    const poster: HttpPoster = {
+      async post() {
+        callCount++;
+        // Simulate the real fetchPoster's AbortSignal.timeout() rejection.
+        const err = new Error('The operation was aborted due to timeout');
+        err.name = 'TimeoutError';
+        throw err;
+      },
+    };
+    const { app, store, rpc, indexer, config } = makeTestEnv();
+    const deliveryService = new WebhookDeliveryService(store, {
+      ...config,
+      poster,
+      now: config.now,
+      maxAttempts: 5,
+      baseBackoffSeconds: 30,
+    });
+
+    await request(app).post('/webhooks').send({ url: 'https://slow.example.com', eventType: 'listing_created' });
+
+    rpc.addPage('CONTRACT_A', 'listing_created', 0, {
+      events: [makeEvent({ ledger: 5, transactionHash: 'timeout_tx' })],
+      nextLedger: undefined,
+    });
+    await indexer.tick();
+
+    await deliveryService.drain();
+    expect(callCount).toBe(1);
+
+    const conn = (store as unknown as { db: import('better-sqlite3').Database }).db;
+    const row = conn.prepare('SELECT * FROM webhook_deliveries').get() as {
+      status: string;
+      attempt_count: number;
+      error_message: string;
+      next_attempt_at: number;
+    };
+    expect(row.status).toBe('pending');
+    expect(row.attempt_count).toBe(1);
+    expect(row.error_message).toMatch(/timeout/i);
+    expect(row.next_attempt_at).toBeGreaterThan(config.now());
+  });
+
+  test('WebhookDeliveryOptions.timeoutMs defaults to 10 seconds and is honored by the real poster', async () => {
+    const { store, config } = makeTestEnv();
+
+    const defaultService = new WebhookDeliveryService(store, { ...config });
+    expect((defaultService as unknown as { timeoutMs: number }).timeoutMs).toBe(10_000);
+
+    const customService = new WebhookDeliveryService(store, { ...config, timeoutMs: 2_000 });
+    expect((customService as unknown as { timeoutMs: number }).timeoutMs).toBe(2_000);
+  });
 });
 
 // ── Health endpoint ───────────────────────────────────────────────────────
@@ -543,7 +603,7 @@ describe('Health endpoint', () => {
   });
 
   test('reports correct pending count after indexing events', async () => {
-    const { app, store, rpc, indexer } = makeTestEnv();
+    const { app, rpc, indexer } = makeTestEnv();
 
     // Register two webhooks
     await request(app).post('/webhooks').send({ url: 'https://a.com', eventType: 'listing_created' });

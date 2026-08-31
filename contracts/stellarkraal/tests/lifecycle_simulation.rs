@@ -17,6 +17,7 @@
 //! 3. `scenario_stale_oracle_feed_expires_and_recovers` — feed expiry
 //! 4. `scenario_rejected_requests_leave_state_untouched` — rejected actions
 //! 5. `scenario_forced_liquidation_after_interest_accrual` — forced close
+//! 6. `scenario_partial_oracle_recovery_after_staleness` — partial quorum
 
 #![cfg(test)]
 
@@ -361,4 +362,38 @@ fn scenario_forced_liquidation_after_interest_accrual() {
         client.try_liquidate(&actors.liquidator, &loan_id),
         Err(Ok(Error::LoanNotActive))
     );
+}
+
+// ── Scenario 6: partial oracle recovery ───────────────────────────────────────
+
+/// After the whole feed goes stale, a partial quorum must not resurrect it:
+/// the median gates on *every* submission, so any stale oracle — even a lone
+/// one — keeps rejecting consumers with `StalePrices`. Variant 1 refreshes a
+/// single oracle (two stale, one fresh); variant 2 refreshes a second oracle
+/// (one stale, two fresh). Only the final, complete round restores the feed.
+#[test]
+fn scenario_partial_oracle_recovery_after_staleness() {
+    let sim = Sim::boot();
+    let (client, actors) = (&sim.client, &sim.actors);
+
+    sim.feed_prices(100_000, 100_500, 99_500);
+    assert_eq!(client.get_price(), 100_000);
+
+    // One ledger past the age limit the entire feed is stale.
+    sim.advance(MAX_PRICE_AGE + 1);
+    assert_eq!(client.try_get_price(), Err(Ok(Error::StalePrices)));
+
+    // Variant 1: only oracle 1 refreshes its price. Two oracles are still
+    // stale and the feed must remain gated on them.
+    client.submit_price(&actors.oracle_1, &110_000);
+    assert_eq!(client.try_get_price(), Err(Ok(Error::StalePrices)));
+
+    // Variant 2: oracle 2 refreshes as well. A single stale oracle is still
+    // enough to reject the feed.
+    client.submit_price(&actors.oracle_2, &111_000);
+    assert_eq!(client.try_get_price(), Err(Ok(Error::StalePrices)));
+
+    // The final feeder completes the round: the fresh median is restored.
+    client.submit_price(&actors.oracle_3, &112_000);
+    assert_eq!(client.get_price(), 111_000);
 }

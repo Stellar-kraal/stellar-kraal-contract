@@ -3,7 +3,7 @@ import { AppConfig } from '../../config';
 import { RateLimitConfig, WindowLimit } from '../../config/rateLimits';
 import { RateLimitMetrics } from '../metrics';
 import { RateLimitStore, slidingWindowCount } from '../rateLimit/store';
-
+import { logger } from '../logger';
 export interface RateLimitDeps {
   store: RateLimitStore;
   config: AppConfig;
@@ -143,7 +143,7 @@ export function rateLimit(deps: RateLimitDeps): RequestHandler {
       next();
     })().catch((err) => {
       // eslint-disable-next-line no-console
-      console.error('rate limiter error (failing open):', err);
+      logger.error({ err }, 'rate limiter error (failing open)');
       next();
     });
   };

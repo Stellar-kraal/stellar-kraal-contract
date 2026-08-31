@@ -28,6 +28,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
     NoEncryption,
@@ -205,6 +206,19 @@ class OracleSigner:
         if len(seed) != 32:
             raise ValueError("Ed25519 seed must be exactly 32 bytes")
         return cls(Ed25519PrivateKey.from_private_bytes(seed))
+
+    @classmethod
+    def from_pem(cls, pem_data: str | bytes, password: bytes | None = None) -> "OracleSigner":
+        """
+        Load from a PEM-encoded Ed25519 private key (e.g. the CLI's
+        ``--key-file`` option).
+        """
+        if isinstance(pem_data, str):
+            pem_data = pem_data.encode("utf-8")
+        private_key = load_pem_private_key(pem_data, password=password)
+        if not isinstance(private_key, Ed25519PrivateKey):
+            raise ValueError("PEM key file does not contain an Ed25519 private key")
+        return cls(private_key)
 
     # ── Key export ────────────────────────────────────────────────────────────
 

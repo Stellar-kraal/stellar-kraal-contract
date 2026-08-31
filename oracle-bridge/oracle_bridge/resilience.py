@@ -63,9 +63,9 @@ def compute_backoff(
         delay = min(base * 2^attempt, max_delay)
         delay += random.uniform(-jitter, jitter) * delay
     """
-    delay = config.base_delay_seconds * (2 ** attempt)
+    delay: float = config.base_delay_seconds * (2 ** attempt)
     delay = min(delay, config.max_delay_seconds)
-    jitter = delay * config.jitter_factor
+    jitter: float = delay * config.jitter_factor
     delay += random.uniform(-jitter, jitter)
     return max(0.0, delay)
 
@@ -237,12 +237,11 @@ class DeadLetterQueue:
 
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = Path(db_path)
-        self._conn: sqlite3.Connection | None = None
+        self._conn: sqlite3.Connection = sqlite3.connect(str(self._db_path))
         self._init_db()
 
     def _init_db(self) -> None:
         """Create the DLQ table if it does not exist."""
-        self._conn = sqlite3.connect(str(self._db_path))
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS dead_letter_queue (
@@ -281,14 +280,14 @@ class DeadLetterQueue:
             (feed_id, payload_json, error_message, attempt_count, now),
         )
         self._conn.commit()
-        entry_id = cursor.lastrowid
+        entry_id: int = cursor.lastrowid if cursor.lastrowid is not None else 0
         logger.info(
             "DLQ entry %d created for feed %s (attempts=%d)",
             entry_id,
             feed_id,
             attempt_count,
         )
-        return entry_id  # type: ignore[return-value]
+        return entry_id
 
     def list_unreplayed(self) -> list[DLQEntry]:
         """Return all entries that have not been replayed."""
@@ -334,19 +333,18 @@ class DeadLetterQueue:
         row = self._conn.execute(
             "SELECT COUNT(*) FROM dead_letter_queue"
         ).fetchone()
-        return row[0] if row else 0
+        return int(row[0]) if row else 0
 
     def count_unreplayed(self) -> int:
         """Return the number of unreplayed entries."""
         row = self._conn.execute(
             "SELECT COUNT(*) FROM dead_letter_queue WHERE replayed = 0"
         ).fetchone()
-        return row[0] if row else 0
+        return int(row[0]) if row else 0
 
     def close(self) -> None:
         """Close the database connection."""
-        if self._conn:
-            self._conn.close()
+        self._conn.close()
 
     def __enter__(self) -> "DeadLetterQueue":
         return self

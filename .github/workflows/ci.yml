@@ -12,16 +12,17 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1 (stable toolchain)
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy
 
       - name: Cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: fmt
         run: cargo fmt --all -- --check
@@ -46,12 +47,45 @@ jobs:
       - name: wasm build
         run: cargo build --release --target wasm32-unknown-unknown -p stellarkraal
 
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
   fuzzing:
     runs-on: ubuntu-latest
+    # The workspace release profile enables LTO + panic=abort to shrink the
+    # contract WASM; both break cargo-fuzz's sanitizer-coverage harness
+    # (undefined `__sancov_gen_*` symbols at link time, and process aborts
+    # instead of catchable panics), so the fuzz builds opt out of them.
+    env:
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_PANIC: "unwind"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install nightly Rust
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1 (nightly toolchain)
+        with:
+          toolchain: nightly
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
       - name: Fuzz mint
@@ -69,3 +103,38 @@ jobs:
       - name: Fuzz batch
         run: cargo +nightly fuzz run batch -- -max_total_time=60
         working-directory: contracts/carbon_credit
+
+  # Issue #121: lint, type-check, and test the oracle-bridge Python package.
+  # Ruff/mypy configuration lives in oracle-bridge/pyproject.toml so existing
+  # Python sources do not need a cleanup pass for this job to stay green.
+  oracle-bridge:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: oracle-bridge
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: oracle-bridge/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format
+        run: ruff format --check .
+
+      - name: mypy
+        run: mypy oracle_bridge
+
+      - name: pytest
+        run: pytest tests/

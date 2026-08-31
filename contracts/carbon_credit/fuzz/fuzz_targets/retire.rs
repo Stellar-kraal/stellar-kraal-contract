@@ -1,8 +1,8 @@
 #![no_main]
-use libfuzzer_sys::fuzz_target;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, symbol_short};
 use carbon_credit::{CarbonCredit, CarbonCreditClient};
 use carbon_registry::{CarbonRegistry, CarbonRegistryClient};
+use libfuzzer_sys::fuzz_target;
+use soroban_sdk::{symbol_short, testutils::Address as _, Address, BytesN, Env};
 
 #[derive(arbitrary::Arbitrary, Debug)]
 pub struct RetireInput {
@@ -19,7 +19,8 @@ fuzz_target!(|input: RetireInput| {
     reg_client.initialize(&reg_admin, &marketplace_addr);
 
     let owner = Address::generate(&env);
-    let project_id = reg_client.register_project(&owner, &symbol_short!("FUZZ"), &i128::MAX, &2024_u32);
+    let project_id =
+        reg_client.register_project(&owner, &symbol_short!("FUZZ"), &i128::MAX, &2024_u32);
     reg_client.verify_project(&project_id);
 
     let credit_client = CarbonCreditClient::new(&env, &env.register(CarbonCredit, ()));
@@ -36,17 +37,17 @@ fuzz_target!(|input: RetireInput| {
     for (acc_idx, amount, op_id_bytes) in input.actions {
         let target_acc = &accounts[(acc_idx % 5) as usize];
         let operation_id = BytesN::from_array(&env, &op_id_bytes);
-        
+
         let pre_balance = credit_client.balance_of(target_acc, &project_id);
         let pre_supply = credit_client.total_supply(&project_id);
         let pre_retired = credit_client.retired_supply(&project_id);
-        
+
         let res = credit_client.try_retire(target_acc, &project_id, &amount, &operation_id);
-        
+
         let post_balance = credit_client.balance_of(target_acc, &project_id);
         let post_supply = credit_client.total_supply(&project_id);
         let post_retired = credit_client.retired_supply(&project_id);
-        
+
         if res.is_ok() {
             assert_eq!(post_balance, pre_balance - amount);
             assert_eq!(post_supply, pre_supply - amount);
@@ -55,14 +56,22 @@ fuzz_target!(|input: RetireInput| {
             // On failure (including AlreadyRetired), balances must be unchanged
             assert_eq!(post_retired, pre_retired);
         }
-        
+
         // Invariant: retired credits never decrease (they never re-enter circulation)
-        assert!(post_retired >= pre_retired, "Invariant violated: retired supply decreased");
+        assert!(
+            post_retired >= pre_retired,
+            "Invariant violated: retired supply decreased"
+        );
 
         let mut sum_balances: i128 = 0;
         for acc in &accounts {
-            sum_balances = sum_balances.checked_add(credit_client.balance_of(acc, &project_id)).unwrap_or(sum_balances);
+            sum_balances = sum_balances
+                .checked_add(credit_client.balance_of(acc, &project_id))
+                .unwrap_or(sum_balances);
         }
-        assert_eq!(post_supply, sum_balances, "Invariant violated: total_supply != sum of balances");
+        assert_eq!(
+            post_supply, sum_balances,
+            "Invariant violated: total_supply != sum of balances"
+        );
     }
 });

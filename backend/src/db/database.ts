@@ -1,10 +1,18 @@
-import Database from 'better-sqlite3';
+import Database from "better-sqlite3";
+import {
+  ListingPagination,
+  LISTING_PAGINATION_MAX_LIMIT,
+  LISTING_PAGINATION_MIN_LIMIT,
+  LISTING_PAGINATION_MIN_OFFSET,
+} from "../marketplace/contracts/listingPagination";
+import { ListingReadModel } from "../marketplace/contracts/listingReadModel";
+import { ListingReader } from "../marketplace/ports/listingReader";
 
 export interface IdempotencyRecord {
   key: string;
   fingerprint: string;
   endpoint: string;
-  status: 'in_progress' | 'completed';
+  status: "in_progress" | "completed";
   response_status: number | null;
   response_body: string | null;
   created_at: number;
@@ -19,6 +27,33 @@ export interface ListingRow {
   quantity_remaining: number;
   price_stroops: number;
   created_at: number;
+}
+
+/** Maps the SQLite snake_case row to the application's camelCase read model. */
+function toListingReadModel(row: ListingRow): ListingReadModel {
+  return {
+    id: row.id,
+    sellerId: row.seller_id,
+    creditBatchId: row.credit_batch_id,
+    quantity: row.quantity_total,
+    quantityRemaining: row.quantity_remaining,
+    priceStroops: row.price_stroops,
+    createdAt: row.created_at,
+  };
+}
+
+/** Clamps to the adapter invariant so the DB never serves more than the ADR-0112 maximum. */
+function clampLimit(limit: number): number {
+  const normalized = Math.trunc(limit);
+  return Math.min(
+    Math.max(normalized, LISTING_PAGINATION_MIN_LIMIT),
+    LISTING_PAGINATION_MAX_LIMIT,
+  );
+}
+
+function clampOffset(offset: number): number {
+  const normalized = Math.trunc(offset);
+  return Math.max(normalized, LISTING_PAGINATION_MIN_OFFSET);
 }
 
 export interface PurchaseRow {
@@ -71,7 +106,7 @@ export interface WebhookDeliveryRow {
   id: number;
   webhook_id: string;
   event_id: number;
-  status: 'pending' | 'delivered' | 'failed';
+  status: "pending" | "delivered" | "failed";
   attempt_count: number;
   last_attempt_at: number | null;
   next_attempt_at: number;
@@ -186,13 +221,13 @@ CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_pending
  * so tests can simulate the partial-failure case where the on-chain
  * transaction succeeded but the backend database write did not.
  */
-export class Store {
+export class Store implements ListingReader {
   readonly db: Database.Database;
   private failNext = false;
 
-  constructor(path = ':memory:') {
+  constructor(path = ":memory:") {
     this.db = new Database(path);
-    this.db.pragma('journal_mode = WAL');
+    this.db.pragma("journal_mode = WAL");
     this.db.exec(SCHEMA);
   }
 
@@ -204,7 +239,7 @@ export class Store {
   transaction<T>(fn: () => T): T {
     if (this.failNext) {
       this.failNext = false;
-      throw new Error('injected database failure');
+      throw new Error("injected database failure");
     }
     return this.db.transaction(fn)();
   }
@@ -213,7 +248,7 @@ export class Store {
 
   getRecord(key: string): IdempotencyRecord | undefined {
     return this.db
-      .prepare('SELECT * FROM idempotency_records WHERE key = ?')
+      .prepare("SELECT * FROM idempotency_records WHERE key = ?")
       .get(key) as IdempotencyRecord | undefined;
   }
 
@@ -252,11 +287,19 @@ export class Store {
            response_status = excluded.response_status,
            response_body = excluded.response_body`,
       )
-      .run(key, fingerprint, endpoint, responseStatus, responseBody, now, expiresAt);
+      .run(
+        key,
+        fingerprint,
+        endpoint,
+        responseStatus,
+        responseBody,
+        now,
+        expiresAt,
+      );
   }
 
   deleteRecord(key: string): void {
-    this.db.prepare('DELETE FROM idempotency_records WHERE key = ?').run(key);
+    this.db.prepare("DELETE FROM idempotency_records WHERE key = ?").run(key);
   }
 
   // ── Marketplace domain ─────────────────────────────────────────────────
@@ -280,15 +323,20 @@ export class Store {
   }
 
   getListing(id: string): ListingRow | undefined {
-    return this.db.prepare('SELECT * FROM listings WHERE id = ?').get(id) as
+    return this.db.prepare("SELECT * FROM listings WHERE id = ?").get(id) as
       | ListingRow
       | undefined;
   }
 
-  listListings(limit = 100): ListingRow[] {
-    return this.db
-      .prepare('SELECT * FROM listings ORDER BY created_at DESC, id LIMIT ?')
-      .all(limit) as ListingRow[];
+  listListings(pagination: ListingPagination): ListingReadModel[] {
+    const limit = clampLimit(pagination.limit);
+    const offset = clampOffset(pagination.offset);
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM listings ORDER BY created_at DESC, id LIMIT ? OFFSET ?",
+      )
+      .all(limit, offset) as ListingRow[];
+    return rows.map(toListingReadModel);
   }
 
   insertPurchase(row: PurchaseRow): void {
@@ -298,18 +346,27 @@ export class Store {
            (id, listing_id, buyer_id, quantity, total_price_stroops, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(row.id, row.listing_id, row.buyer_id, row.quantity, row.total_price_stroops, row.created_at);
+      .run(
+        row.id,
+        row.listing_id,
+        row.buyer_id,
+        row.quantity,
+        row.total_price_stroops,
+        row.created_at,
+      );
   }
 
   getPurchase(id: string): PurchaseRow | undefined {
-    return this.db.prepare('SELECT * FROM purchases WHERE id = ?').get(id) as
+    return this.db.prepare("SELECT * FROM purchases WHERE id = ?").get(id) as
       | PurchaseRow
       | undefined;
   }
 
   decrementListing(listingId: string, quantity: number): void {
     this.db
-      .prepare('UPDATE listings SET quantity_remaining = quantity_remaining - ? WHERE id = ?')
+      .prepare(
+        "UPDATE listings SET quantity_remaining = quantity_remaining - ? WHERE id = ?",
+      )
       .run(quantity, listingId);
   }
 
@@ -322,11 +379,18 @@ export class Store {
            (id, owner_id, credit_batch_id, quantity, reason, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(row.id, row.owner_id, row.credit_batch_id, row.quantity, row.reason, row.created_at);
+      .run(
+        row.id,
+        row.owner_id,
+        row.credit_batch_id,
+        row.quantity,
+        row.reason,
+        row.created_at,
+      );
   }
 
   getRetirement(id: string): RetirementRow | undefined {
-    return this.db.prepare('SELECT * FROM retirements WHERE id = ?').get(id) as
+    return this.db.prepare("SELECT * FROM retirements WHERE id = ?").get(id) as
       | RetirementRow
       | undefined;
   }
@@ -335,7 +399,7 @@ export class Store {
 
   getCursor(eventType: string): LedgerCursorRow | undefined {
     return this.db
-      .prepare('SELECT * FROM ledger_cursors WHERE event_type = ?')
+      .prepare("SELECT * FROM ledger_cursors WHERE event_type = ?")
       .get(eventType) as LedgerCursorRow | undefined;
   }
 
@@ -357,7 +421,9 @@ export class Store {
    * Insert an indexed event, ignoring duplicates.
    * Returns the inserted row's id, or undefined if it was a duplicate.
    */
-  insertIndexedEventIfAbsent(row: Omit<IndexedEventRow, 'id'>): number | undefined {
+  insertIndexedEventIfAbsent(
+    row: Omit<IndexedEventRow, "id">,
+  ): number | undefined {
     const info = this.db
       .prepare(
         `INSERT OR IGNORE INTO indexed_events
@@ -377,7 +443,7 @@ export class Store {
 
   getIndexedEvent(id: number): IndexedEventRow | undefined {
     return this.db
-      .prepare('SELECT * FROM indexed_events WHERE id = ?')
+      .prepare("SELECT * FROM indexed_events WHERE id = ?")
       .get(id) as IndexedEventRow | undefined;
   }
 
@@ -390,47 +456,70 @@ export class Store {
            (id, url, secret, event_type, active, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(row.id, row.url, row.secret, row.event_type, row.active, row.created_at, row.updated_at);
+      .run(
+        row.id,
+        row.url,
+        row.secret,
+        row.event_type,
+        row.active,
+        row.created_at,
+        row.updated_at,
+      );
   }
 
   getWebhook(id: string): WebhookRegistrationRow | undefined {
     return this.db
-      .prepare('SELECT * FROM webhook_registrations WHERE id = ?')
+      .prepare("SELECT * FROM webhook_registrations WHERE id = ?")
       .get(id) as WebhookRegistrationRow | undefined;
   }
 
   updateWebhook(
     id: string,
-    fields: Partial<Pick<WebhookRegistrationRow, 'url' | 'secret' | 'active'>>,
+    fields: Partial<Pick<WebhookRegistrationRow, "url" | "secret" | "active">>,
     updatedAt: number,
   ): void {
     const sets: string[] = [];
     const values: unknown[] = [];
-    if (fields.url !== undefined) { sets.push('url = ?'); values.push(fields.url); }
-    if (fields.secret !== undefined) { sets.push('secret = ?'); values.push(fields.secret); }
-    if (fields.active !== undefined) { sets.push('active = ?'); values.push(fields.active); }
+    if (fields.url !== undefined) {
+      sets.push("url = ?");
+      values.push(fields.url);
+    }
+    if (fields.secret !== undefined) {
+      sets.push("secret = ?");
+      values.push(fields.secret);
+    }
+    if (fields.active !== undefined) {
+      sets.push("active = ?");
+      values.push(fields.active);
+    }
     if (sets.length === 0) return;
-    sets.push('updated_at = ?');
+    sets.push("updated_at = ?");
     values.push(updatedAt);
     values.push(id);
-    this.db.prepare(`UPDATE webhook_registrations SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    this.db
+      .prepare(
+        `UPDATE webhook_registrations SET ${sets.join(", ")} WHERE id = ?`,
+      )
+      .run(...values);
   }
 
   listWebhooksByEventType(eventType: string): WebhookRegistrationRow[] {
     return this.db
-      .prepare('SELECT * FROM webhook_registrations WHERE event_type = ? AND active = 1')
+      .prepare(
+        "SELECT * FROM webhook_registrations WHERE event_type = ? AND active = 1",
+      )
       .all(eventType) as WebhookRegistrationRow[];
   }
 
   listAllWebhooks(): WebhookRegistrationRow[] {
     return this.db
-      .prepare('SELECT * FROM webhook_registrations ORDER BY created_at DESC')
+      .prepare("SELECT * FROM webhook_registrations ORDER BY created_at DESC")
       .all() as WebhookRegistrationRow[];
   }
 
   // ── Webhook deliveries ─────────────────────────────────────────────────
 
-  insertWebhookDelivery(row: Omit<WebhookDeliveryRow, 'id'>): number {
+  insertWebhookDelivery(row: Omit<WebhookDeliveryRow, "id">): number {
     const info = this.db
       .prepare(
         `INSERT INTO webhook_deliveries
@@ -467,26 +556,53 @@ export class Store {
     fields: Partial<
       Pick<
         WebhookDeliveryRow,
-        'status' | 'attempt_count' | 'last_attempt_at' | 'next_attempt_at' | 'response_status' | 'error_message'
+        | "status"
+        | "attempt_count"
+        | "last_attempt_at"
+        | "next_attempt_at"
+        | "response_status"
+        | "error_message"
       >
     >,
   ): void {
     const sets: string[] = [];
     const values: unknown[] = [];
-    if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
-    if (fields.attempt_count !== undefined) { sets.push('attempt_count = ?'); values.push(fields.attempt_count); }
-    if (fields.last_attempt_at !== undefined) { sets.push('last_attempt_at = ?'); values.push(fields.last_attempt_at); }
-    if (fields.next_attempt_at !== undefined) { sets.push('next_attempt_at = ?'); values.push(fields.next_attempt_at); }
-    if (fields.response_status !== undefined) { sets.push('response_status = ?'); values.push(fields.response_status); }
-    if (fields.error_message !== undefined) { sets.push('error_message = ?'); values.push(fields.error_message); }
+    if (fields.status !== undefined) {
+      sets.push("status = ?");
+      values.push(fields.status);
+    }
+    if (fields.attempt_count !== undefined) {
+      sets.push("attempt_count = ?");
+      values.push(fields.attempt_count);
+    }
+    if (fields.last_attempt_at !== undefined) {
+      sets.push("last_attempt_at = ?");
+      values.push(fields.last_attempt_at);
+    }
+    if (fields.next_attempt_at !== undefined) {
+      sets.push("next_attempt_at = ?");
+      values.push(fields.next_attempt_at);
+    }
+    if (fields.response_status !== undefined) {
+      sets.push("response_status = ?");
+      values.push(fields.response_status);
+    }
+    if (fields.error_message !== undefined) {
+      sets.push("error_message = ?");
+      values.push(fields.error_message);
+    }
     if (sets.length === 0) return;
     values.push(id);
-    this.db.prepare(`UPDATE webhook_deliveries SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    this.db
+      .prepare(`UPDATE webhook_deliveries SET ${sets.join(", ")} WHERE id = ?`)
+      .run(...values);
   }
 
   countPendingDeliveries(): number {
     const row = this.db
-      .prepare(`SELECT COUNT(*) AS n FROM webhook_deliveries WHERE status IN ('pending','failed')`)
+      .prepare(
+        `SELECT COUNT(*) AS n FROM webhook_deliveries WHERE status IN ('pending','failed')`,
+      )
       .get() as { n: number };
     return row.n;
   }

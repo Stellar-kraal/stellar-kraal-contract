@@ -18,7 +18,7 @@ import { EventIndexer, IndexerTarget } from './indexer/eventIndexer';
 import { marketplaceRoutes } from './marketplace/routes';
 import { WebhookDeliveryService } from './webhook/deliveryService';
 import { webhookRoutes } from './webhook/routes';
-
+import {logger} from './common/logger'
 export interface AppDeps {
   store: Store;
   chain: ChainClient;
@@ -50,7 +50,7 @@ function defaultRedis(): RedisLike | undefined {
   const url = process.env.REDIS_URL;
   if (!url) return undefined;
   // Lazy import so deployments without Redis never load the client.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const IORedis = require('ioredis') as new (u: string) => RedisLike;
   return new IORedis(url);
 }
@@ -68,7 +68,7 @@ export function createApp(deps: Partial<AppDeps> = {}): App {
     ? new FailoverRateLimitStore(new RedisRateLimitStore(redis), memoryStore, (err) => {
         metrics.recordStoreFailover();
         // eslint-disable-next-line no-console
-        console.warn('rate limit store failing over to memory:', err);
+        logger.warn({ err }, 'rate limit store failing over to memory');
       })
     : memoryStore;
 

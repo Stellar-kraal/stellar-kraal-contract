@@ -31,13 +31,13 @@ except ImportError:
         def labels(self, **label_values: Any) -> "_FakeMetric":
             return self
 
-    def start_http_server(port: int, addr: str = "") -> None:
+    def start_http_server(port: int, addr: str = "") -> None:  # type: ignore[misc]
         logger.info("Prometheus client not installed; metrics HTTP server disabled")
 
     _PROMETHEUS_AVAILABLE = False
 
     # Stub Counter
-    class _FakeCounter:  # type: ignore[no-redef]
+    class _FakeCounter:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
@@ -48,7 +48,7 @@ except ImportError:
             return _FakeMetric()
 
     # Stub Gauge
-    class _FakeGauge:  # type: ignore[no-redef]
+    class _FakeGauge:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
@@ -58,8 +58,8 @@ except ImportError:
         def labels(self, **label_values: Any) -> "_FakeMetric":
             return _FakeMetric()
 
-    Counter = _FakeCounter  # type: ignore[assignment]
-    Gauge = _FakeGauge  # type: ignore[assignment]
+    Counter = _FakeCounter  # type: ignore[misc,assignment]
+    Gauge = _FakeGauge  # type: ignore[misc,assignment]
 
 
 # ── Metric Definitions ────────────────────────────────────────────────────────

@@ -123,7 +123,7 @@ class PriceAggregator:
         sources = sorted(sources, key=lambda s: s.source_id)
 
         # Perform outlier rejection
-        rejected_sources = []
+        rejected_sources: list[str] = []
         if self.config.outlier_method != OutlierRejectionMethod.NONE:
             sources, rejected_sources = self._reject_outliers(sources)
 
