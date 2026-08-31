@@ -319,7 +319,7 @@
                   "symbol": "LOAN"
                 },
                 {
-                  "bytes": "385e05dfd842b5f3480d8e1a89c57b2b25e3c9d4cf5d1b6d62c44dfe7954dadd"
+                  "bytes": "fa0fa81cf6b5101030782b1fe117ef97421dea7fcc7fdfda5b287bb95f4c51db"
                 }
               ]
             },
@@ -339,7 +339,7 @@
                       "symbol": "LOAN"
                     },
                     {
-                      "bytes": "385e05dfd842b5f3480d8e1a89c57b2b25e3c9d4cf5d1b6d62c44dfe7954dadd"
+                      "bytes": "fa0fa81cf6b5101030782b1fe117ef97421dea7fcc7fdfda5b287bb95f4c51db"
                     }
                   ]
                 },
@@ -542,6 +542,14 @@
                               }
                             }
                           ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "LOANCTR"
+                        },
+                        "val": {
+                          "u64": 1
                         }
                       },
                       {

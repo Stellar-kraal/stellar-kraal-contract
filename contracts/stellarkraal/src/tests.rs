@@ -228,6 +228,56 @@ fn test_full_repayment_frees_asset() {
 }
 
 #[test]
+fn test_reopen_same_asset_same_ledger_preserves_closed_loan() {
+    let env = make_env();
+    let client = deploy(&env);
+    let _ = init(&env, &client);
+    let owner = Address::generate(&env);
+    let asset_id = client.register_asset(
+        &owner,
+        &symbol_short!("CATTLE"),
+        &symbol_short!("T8"),
+        &1_000_000,
+    );
+
+    let first_loan_id = client.open_loan(&owner, &asset_id, &100_000);
+    assert_eq!(client.repay_loan(&owner, &first_loan_id, &200_000), 0);
+
+    let closed_before_reopen = client.get_loan(&first_loan_id);
+    assert!(!closed_before_reopen.active);
+    assert_eq!(closed_before_reopen.balance, 0);
+
+    // Do not advance the ledger: this is the collision window from issue #94.
+    let second_loan_id = client.open_loan(&owner, &asset_id, &200_000);
+    assert_ne!(first_loan_id, second_loan_id);
+
+    // Reopening must not overwrite the settled loan's audit record.
+    let closed_after_reopen = client.get_loan(&first_loan_id);
+    assert_eq!(closed_after_reopen.borrower, closed_before_reopen.borrower);
+    assert_eq!(closed_after_reopen.asset_id, closed_before_reopen.asset_id);
+    assert_eq!(
+        closed_after_reopen.principal,
+        closed_before_reopen.principal
+    );
+    assert_eq!(closed_after_reopen.balance, closed_before_reopen.balance);
+    assert_eq!(
+        closed_after_reopen.opened_at,
+        closed_before_reopen.opened_at
+    );
+    assert_eq!(
+        closed_after_reopen.updated_at,
+        closed_before_reopen.updated_at
+    );
+    assert_eq!(closed_after_reopen.active, closed_before_reopen.active);
+
+    let reopened = client.get_loan(&second_loan_id);
+    assert!(reopened.active);
+    assert_eq!(reopened.principal, 200_000);
+    assert_eq!(reopened.opened_at, closed_before_reopen.opened_at);
+    assert!(client.get_asset(&asset_id).on_loan);
+}
+
+#[test]
 fn test_unauthorized_oracle_rejected() {
     let env = make_env();
     let client = deploy(&env);
