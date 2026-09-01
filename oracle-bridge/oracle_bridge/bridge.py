@@ -26,6 +26,7 @@ from typing import Any, Protocol
 
 
 from oracle_bridge.attestation import OracleSigner, SignedAttestation, sha256
+from oracle_bridge.config import MAX_CID_LEN
 logger = logging.getLogger(__name__)
 
 from oracle_bridge.aggregation import (
@@ -300,11 +301,36 @@ class OracleBridge:
     def _submit_with_cid(
         self, attestation: SignedAttestation, ipfs_cid: str
     ) -> str:
-        """Try submit_price_with_cid first; fall back to submit_price."""
+        """Validate *ipfs_cid*, then try submit_price_with_cid, falling back
+        to submit_price if the client doesn't support CIDs."""
+        self._validate_cid(ipfs_cid)
         try:
             return self._client.submit_price_with_cid(attestation, ipfs_cid)
         except AttributeError:
             return self._submit_with_circuit_breaker_alert(attestation)
+
+    @staticmethod
+    def _validate_cid(ipfs_cid: str) -> None:
+        """
+        Reject a malformed or oversized IPFS CID before it is submitted
+        on-chain.
+
+        Raises
+        ------
+        ValueError
+            If ``ipfs_cid`` is not a non-empty string, or exceeds
+            ``MAX_CID_LEN`` — the same limit enforced by ``MAX_CID_LEN`` in
+            ``contracts/carbon_oracle/src/lib.rs``. Catching this here avoids
+            wasting a transaction fee on a submission the contract would
+            reject with ``CidTooLong``.
+        """
+        if not isinstance(ipfs_cid, str) or not ipfs_cid:
+            raise ValueError(f"ipfs_cid must be a non-empty string, got {ipfs_cid!r}")
+        if len(ipfs_cid) > MAX_CID_LEN:
+            raise ValueError(
+                f"ipfs_cid length {len(ipfs_cid)} exceeds MAX_CID_LEN ({MAX_CID_LEN}): "
+                f"{ipfs_cid!r}"
+            )
 
     def commit(self, result: GEEResult) -> tuple[bytes, str]:
         """
