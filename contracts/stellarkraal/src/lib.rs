@@ -11,6 +11,7 @@ use soroban_sdk::{
 // ── Storage keys ─────────────────────────────────────────────────────────────
 
 const CONFIG: Symbol = symbol_short!("CONFIG");
+const LOAN_COUNTER: Symbol = symbol_short!("LOANCTR");
 
 fn asset_key(e: &Env, id: &BytesN<32>) -> Val {
     (symbol_short!("ASSET"), id.clone()).into_val(e)
@@ -273,15 +274,13 @@ impl StellarKraal {
             return Err(Error::PrincipalExceedsLtv);
         }
 
-        asset.on_loan = true;
-        e.storage()
-            .persistent()
-            .set(&asset_key(&e, &asset_id), &asset);
-
         let now = e.ledger().sequence();
         let balance = principal_stroops
             .checked_add(cfg.creation_fee_stroops)
             .ok_or(Error::ArithmeticError)?;
+
+        let loan_nonce: u64 = e.storage().instance().get(&LOAN_COUNTER).unwrap_or(0);
+        let next_loan_nonce = loan_nonce.checked_add(1).ok_or(Error::ArithmeticError)?;
 
         let mut seed = soroban_sdk::Bytes::new(&e);
         for b in now.to_be_bytes() {
@@ -291,8 +290,18 @@ impl StellarKraal {
         for b in asset_id.to_array() {
             seed.push_back(b);
         }
+        // A checked instance nonce distinguishes same-ledger reopens even when
+        // the borrower and asset are unchanged.
+        for b in next_loan_nonce.to_be_bytes() {
+            seed.push_back(b);
+        }
         let loan_id: BytesN<32> = e.crypto().sha256(&seed).into();
 
+        asset.on_loan = true;
+        e.storage()
+            .persistent()
+            .set(&asset_key(&e, &asset_id), &asset);
+        e.storage().instance().set(&LOAN_COUNTER, &next_loan_nonce);
         e.storage().persistent().set(
             &loan_key(&e, &loan_id),
             &Loan {
