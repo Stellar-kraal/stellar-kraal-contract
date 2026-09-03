@@ -13,6 +13,13 @@ use soroban_sdk::{
 const CONFIG: Symbol = symbol_short!("CONFIG");
 const LOAN_COUNTER: Symbol = symbol_short!("LOANCTR");
 
+// TTL thresholds and extension targets (ledgers). Same values used by the
+// carbon contracts so that all protocol storage ages out at the same rate.
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+const INSTANCE_TTL_EXTEND_TO: u32 = 69_120;
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280;
+const PERSISTENT_TTL_EXTEND_TO: u32 = 103_680;
+
 fn asset_key(e: &Env, id: &BytesN<32>) -> Val {
     (symbol_short!("ASSET"), id.clone()).into_val(e)
 }
@@ -21,6 +28,20 @@ fn loan_key(e: &Env, id: &BytesN<32>) -> Val {
 }
 fn price_key(e: &Env, oracle: &Address) -> Val {
     (symbol_short!("PRICE"), oracle.clone()).into_val(e)
+}
+
+/// Bump instance storage TTL for config and price entries.
+fn bump_instance_ttl(e: &Env) {
+    e.storage()
+        .instance()
+        .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+}
+
+/// Bump persistent storage TTL for asset and loan entries.
+fn bump_persistent_ttl(e: &Env, key: &Val) {
+    e.storage()
+        .persistent()
+        .extend_ttl(key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
 }
 
 // ── Data types ────────────────────────────────────────────────────────────────
@@ -125,6 +146,7 @@ fn accrue(balance: i128, rate_bps: i128, ledgers: i128) -> Result<i128, Error> {
 }
 
 fn require_config(e: &Env) -> Result<Config, Error> {
+    bump_instance_ttl(e);
     e.storage()
         .instance()
         .get(&CONFIG)
@@ -212,6 +234,7 @@ impl StellarKraal {
                 max_price_age_ledgers,
             },
         );
+        bump_instance_ttl(&e);
         Ok(())
     }
 
@@ -231,8 +254,9 @@ impl StellarKraal {
         }
         let id: BytesN<32> = e.crypto().sha256(&seed).into();
 
+        let akey = asset_key(&e, &id);
         e.storage().persistent().set(
-            &asset_key(&e, &id),
+            &akey,
             &Asset {
                 owner,
                 animal_type,
@@ -241,6 +265,7 @@ impl StellarKraal {
                 on_loan: false,
             },
         );
+        bump_persistent_ttl(&e, &akey);
         Ok(id)
     }
 
@@ -253,11 +278,13 @@ impl StellarKraal {
         let cfg = require_config(&e)?;
         borrower.require_auth();
 
+        let akey = asset_key(&e, &asset_id);
         let mut asset: Asset = e
             .storage()
             .persistent()
-            .get(&asset_key(&e, &asset_id))
+            .get(&akey)
             .ok_or(Error::AssetNotFound)?;
+        bump_persistent_ttl(&e, &akey);
 
         if asset.on_loan {
             return Err(Error::AssetAlreadyOnLoan);
@@ -298,12 +325,14 @@ impl StellarKraal {
         let loan_id: BytesN<32> = e.crypto().sha256(&seed).into();
 
         asset.on_loan = true;
-        e.storage()
-            .persistent()
-            .set(&asset_key(&e, &asset_id), &asset);
+        let akey = asset_key(&e, &asset_id);
+        e.storage().persistent().set(&akey, &asset);
+        bump_persistent_ttl(&e, &akey);
         e.storage().instance().set(&LOAN_COUNTER, &next_loan_nonce);
+        bump_instance_ttl(&e);
+        let lkey = loan_key(&e, &loan_id);
         e.storage().persistent().set(
-            &loan_key(&e, &loan_id),
+            &lkey,
             &Loan {
                 borrower,
                 asset_id,
@@ -314,6 +343,7 @@ impl StellarKraal {
                 active: true,
             },
         );
+        bump_persistent_ttl(&e, &lkey);
         Ok(loan_id)
     }
 
@@ -326,11 +356,13 @@ impl StellarKraal {
         let cfg = require_config(&e)?;
         caller.require_auth();
 
+        let lkey = loan_key(&e, &loan_id);
         let mut loan: Loan = e
             .storage()
             .persistent()
-            .get(&loan_key(&e, &loan_id))
+            .get(&lkey)
             .ok_or(Error::LoanNotFound)?;
+        bump_persistent_ttl(&e, &lkey);
 
         if !loan.active {
             return Err(Error::LoanNotActive);
@@ -345,20 +377,21 @@ impl StellarKraal {
         if new_balance == 0 || repayment_stroops >= loan.balance {
             loan.balance = 0;
             loan.active = false;
+            let akey = asset_key(&e, &loan.asset_id);
             let mut asset: Asset = e
                 .storage()
                 .persistent()
-                .get(&asset_key(&e, &loan.asset_id))
+                .get(&akey)
                 .ok_or(Error::AssetNotFound)?;
             asset.on_loan = false;
-            e.storage()
-                .persistent()
-                .set(&asset_key(&e, &loan.asset_id), &asset);
+            e.storage().persistent().set(&akey, &asset);
+            bump_persistent_ttl(&e, &akey);
         } else {
             loan.balance = new_balance;
         }
 
-        e.storage().persistent().set(&loan_key(&e, &loan_id), &loan);
+        e.storage().persistent().set(&lkey, &loan);
+        bump_persistent_ttl(&e, &lkey);
         Ok(loan.balance)
     }
 
@@ -366,11 +399,13 @@ impl StellarKraal {
         let cfg = require_config(&e)?;
         liquidator.require_auth();
 
+        let lkey = loan_key(&e, &loan_id);
         let mut loan: Loan = e
             .storage()
             .persistent()
-            .get(&loan_key(&e, &loan_id))
+            .get(&lkey)
             .ok_or(Error::LoanNotFound)?;
+        bump_persistent_ttl(&e, &lkey);
 
         if !loan.active {
             return Err(Error::LoanNotActive);
@@ -400,27 +435,30 @@ impl StellarKraal {
         loan.active = false;
         loan.balance = 0;
 
+        let akey = asset_key(&e, &loan.asset_id);
         let mut asset: Asset = e
             .storage()
             .persistent()
-            .get(&asset_key(&e, &loan.asset_id))
+            .get(&akey)
             .ok_or(Error::AssetNotFound)?;
         asset.on_loan = false;
-        e.storage()
-            .persistent()
-            .set(&asset_key(&e, &loan.asset_id), &asset);
-        e.storage().persistent().set(&loan_key(&e, &loan_id), &loan);
+        e.storage().persistent().set(&akey, &asset);
+        bump_persistent_ttl(&e, &akey);
+        e.storage().persistent().set(&lkey, &loan);
+        bump_persistent_ttl(&e, &lkey);
 
         Ok(seized)
     }
 
     pub fn health_factor(e: Env, loan_id: BytesN<32>) -> Result<i128, Error> {
         let cfg = require_config(&e)?;
+        let lkey = loan_key(&e, &loan_id);
         let loan: Loan = e
             .storage()
             .persistent()
-            .get(&loan_key(&e, &loan_id))
+            .get(&lkey)
             .ok_or(Error::LoanNotFound)?;
+        bump_persistent_ttl(&e, &lkey);
         Self::health_factor_inner(&e, &cfg, &loan)
     }
 
@@ -428,11 +466,13 @@ impl StellarKraal {
         if loan.balance == 0 {
             return Ok(i128::MAX);
         }
+        let akey = asset_key(e, &loan.asset_id);
         let asset: Asset = e
             .storage()
             .persistent()
-            .get(&asset_key(e, &loan.asset_id))
+            .get(&akey)
             .ok_or(Error::AssetNotFound)?;
+        bump_persistent_ttl(e, &akey);
 
         // HF = (asset_value * liquidation_threshold_bps * 100) / (balance * 10_000)
         // Scaled ×100 so HF=120 → 12000
@@ -460,30 +500,40 @@ impl StellarKraal {
             return Err(Error::Unauthorized);
         }
 
+        let pkey = price_key(&e, &oracle);
         e.storage().instance().set(
-            &price_key(&e, &oracle),
+            &pkey,
             &PriceEntry {
                 price,
                 submitted_at: e.ledger().sequence(),
             },
         );
+        bump_instance_ttl(&e);
         Ok(())
     }
 
     pub fn get_asset(e: Env, asset_id: BytesN<32>) -> Result<Asset, Error> {
         require_config(&e)?;
-        e.storage()
+        let akey = asset_key(&e, &asset_id);
+        let asset: Asset = e
+            .storage()
             .persistent()
-            .get(&asset_key(&e, &asset_id))
-            .ok_or(Error::AssetNotFound)
+            .get(&akey)
+            .ok_or(Error::AssetNotFound)?;
+        bump_persistent_ttl(&e, &akey);
+        Ok(asset)
     }
 
     pub fn get_loan(e: Env, loan_id: BytesN<32>) -> Result<Loan, Error> {
         require_config(&e)?;
-        e.storage()
+        let lkey = loan_key(&e, &loan_id);
+        let loan: Loan = e
+            .storage()
             .persistent()
-            .get(&loan_key(&e, &loan_id))
-            .ok_or(Error::LoanNotFound)
+            .get(&lkey)
+            .ok_or(Error::LoanNotFound)?;
+        bump_persistent_ttl(&e, &lkey);
+        Ok(loan)
     }
 
     pub fn get_config(e: Env) -> Result<Config, Error> {
