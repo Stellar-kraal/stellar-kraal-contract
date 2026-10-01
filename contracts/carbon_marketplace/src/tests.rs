@@ -798,10 +798,8 @@ fn test_circuit_breaker_tripped_blocks_create_listing() {
         CircuitBreakerState::Active
     );
 
-    ctx.market_client.set_circuit_breaker_state(
-        &ctx.admin,
-        &CircuitBreakerState::Tripped,
-    );
+    ctx.market_client
+        .set_circuit_breaker_state(&ctx.admin, &CircuitBreakerState::Tripped);
     assert_eq!(
         ctx.market_client.get_circuit_breaker_state(),
         CircuitBreakerState::Tripped
@@ -836,10 +834,8 @@ fn test_circuit_breaker_admin_resume_from_paused() {
     assert_eq!(listing_before.amount, 10);
 
     // Admin pauses the market.
-    ctx.market_client.set_circuit_breaker_state(
-        &ctx.admin,
-        &CircuitBreakerState::AdminPaused,
-    );
+    ctx.market_client
+        .set_circuit_breaker_state(&ctx.admin, &CircuitBreakerState::AdminPaused);
     assert_eq!(
         ctx.market_client.get_circuit_breaker_state(),
         CircuitBreakerState::AdminPaused
@@ -862,10 +858,8 @@ fn test_circuit_breaker_admin_resume_from_paused() {
     assert_eq!(listing_paused.price_per_credit, 5);
 
     // Admin resumes → Active.
-    ctx.market_client.set_circuit_breaker_state(
-        &ctx.admin,
-        &CircuitBreakerState::Active,
-    );
+    ctx.market_client
+        .set_circuit_breaker_state(&ctx.admin, &CircuitBreakerState::Active);
     assert_eq!(
         ctx.market_client.get_circuit_breaker_state(),
         CircuitBreakerState::Active
@@ -888,10 +882,9 @@ fn test_circuit_breaker_non_admin_cannot_reset() {
     let stranger = Address::generate(&env);
 
     // Non-admin cannot trip.
-    let trip = ctx.market_client.try_set_circuit_breaker_state(
-        &stranger,
-        &CircuitBreakerState::Tripped,
-    );
+    let trip = ctx
+        .market_client
+        .try_set_circuit_breaker_state(&stranger, &CircuitBreakerState::Tripped);
     assert_eq!(
         trip,
         Err(Ok(MarketError::Unauthorized)),
@@ -903,14 +896,11 @@ fn test_circuit_breaker_non_admin_cannot_reset() {
     );
 
     // Admin trips, then non-admin cannot reset back to Active.
-    ctx.market_client.set_circuit_breaker_state(
-        &ctx.admin,
-        &CircuitBreakerState::Tripped,
-    );
-    let reset = ctx.market_client.try_set_circuit_breaker_state(
-        &stranger,
-        &CircuitBreakerState::Active,
-    );
+    ctx.market_client
+        .set_circuit_breaker_state(&ctx.admin, &CircuitBreakerState::Tripped);
+    let reset = ctx
+        .market_client
+        .try_set_circuit_breaker_state(&stranger, &CircuitBreakerState::Active);
     assert_eq!(
         reset,
         Err(Ok(MarketError::Unauthorized)),
@@ -923,14 +913,10 @@ fn test_circuit_breaker_non_admin_cannot_reset() {
     );
 
     // Admin can still reset.
-    ctx.market_client.set_circuit_breaker_state(
-        &ctx.admin,
-        &CircuitBreakerState::Active,
-    );
+    ctx.market_client
+        .set_circuit_breaker_state(&ctx.admin, &CircuitBreakerState::Active);
     assert_eq!(
         ctx.market_client.get_circuit_breaker_state(),
         CircuitBreakerState::Active
     );
 }
-
-

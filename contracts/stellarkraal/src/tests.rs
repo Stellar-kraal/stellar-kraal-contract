@@ -373,3 +373,33 @@ fn test_initialize_valid_config_succeeds() {
     );
     assert_eq!(res, Ok(Ok(())));
 }
+
+#[test]
+fn test_persistent_ttl_survives_threshold() {
+    let env = make_env();
+    // Low base TTL so entries would evict quickly without TTL extensions.
+    env.ledger().with_mut(|li| {
+        li.min_persistent_entry_ttl = 100;
+        li.max_entry_ttl = 500_000;
+    });
+    let client = deploy(&env);
+    let _ = init(&env, &client);
+    let owner = Address::generate(&env);
+    let asset_id = client.register_asset(
+        &owner,
+        &symbol_short!("CATTLE"),
+        &symbol_short!("TTLT"),
+        &1_000_000,
+    );
+    let loan_id = client.open_loan(&owner, &asset_id, &100_000);
+
+    // Advance well past PERSISTENT_TTL_THRESHOLD (17_280 ledgers).
+    env.ledger().with_mut(|li| li.sequence_number = 20_000);
+
+    // Both persistent entries remain readable because every write/read path
+    // extends their TTL.
+    let asset = client.get_asset(&asset_id);
+    assert_eq!(asset.appraised_value_xlm, 1_000_000);
+    let loan = client.get_loan(&loan_id);
+    assert_eq!(loan.principal, 100_000);
+}
