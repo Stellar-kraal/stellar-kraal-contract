@@ -5,9 +5,9 @@
   "description": "StellarKraal marketplace API with an idempotency layer for critical financial endpoints",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
+    "build": "node init && tsc",
+    "start": "node init && node dist/index.js",
+    "dev": "node init && ts-node src/index.ts",
     "test": "jest --runInBand",
     "lint": "eslint src tests --ext .ts",
     "loadtest": "node loadtest/ratelimit.js"
