@@ -23,6 +23,8 @@ StellarKraal enables livestock-backed loans on the Stellar network. Animals are 
 
 See the [CHANGELOG](CHANGELOG.md) for release notes and upcoming changes.
 
+For a comprehensive reference of protocol terminology, DeFi lending mechanics, and Soroban primitives, see the [Domain Glossary](docs/glossary.md).
+
 ## Architecture
 
 ```mermaid
